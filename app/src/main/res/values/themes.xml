@@ -1,0 +1,8 @@
+<resources>
+    <!-- Transparent window so the device wallpaper shows behind the home screen. -->
+    <style name="Theme.Keyspace" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowShowWallpaper">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">false</item>
+    </style>
+</resources>
