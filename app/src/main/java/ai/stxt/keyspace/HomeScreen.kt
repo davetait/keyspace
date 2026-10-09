@@ -80,12 +80,15 @@ fun HomeScreen(
     onDrawerStateChange: (DrawerState) -> Unit,
     onPlace: (index: Int, key: String) -> Unit,
     onRemove: (index: Int) -> Unit,
+    inputArea: @Composable () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         // Home area: wallpaper for now; the drawer opens over it.
         Box(Modifier.weight(1f).fillMaxWidth()) {
             DrawerOverlay(apps, drawerState, repository, onDrawerStateChange)
         }
+        // Always shown between the home area and the dock.
+        inputArea()
         DockBar(
             slots = dock.resolve(apps),
             repository = repository,
