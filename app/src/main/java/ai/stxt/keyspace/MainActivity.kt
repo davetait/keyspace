@@ -31,13 +31,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val repository = AppRepository(applicationContext)
-        val dockStore = DockStore(applicationContext)
+        val gridStore = SlotStore(applicationContext, "grid")
+        val dockStore = SlotStore(applicationContext, "dock")
+        val stores = mapOf(SlotArea.Grid to gridStore, SlotArea.Dock to dockStore)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
                 var drawerState by remember { mutableStateOf(DrawerState.Closed) }
-                val dock by dockStore.dock.collectAsState()
+                val grid by gridStore.slots.collectAsState()
+                val dock by dockStore.slots.collectAsState()
 
                 var typed by rememberSaveable { mutableStateOf("") }
                 var status by remember { mutableStateOf<String?>(null) }
@@ -72,12 +75,15 @@ class MainActivity : ComponentActivity() {
 
                 HomeScreen(
                     apps = apps,
+                    grid = grid,
+                    // Fixed for now; will become a setting.
+                    gridColumns = 5,
                     dock = dock,
                     drawerState = drawerState,
                     repository = repository,
                     onDrawerStateChange = { drawerState = it },
-                    onPlace = dockStore::place,
-                    onRemove = dockStore::clear,
+                    onPlace = { area, index, key -> stores.getValue(area).place(index, key) },
+                    onRemove = { area, index -> stores.getValue(area).clear(index) },
                 ) {
                     Column {
                         TypedLine(text = typed, status = status)

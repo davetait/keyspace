@@ -20,6 +20,9 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -69,36 +72,95 @@ import androidx.core.graphics.drawable.toBitmap
 
 enum class DrawerState { Closed, Open, Dragging }
 
+/** The two places app shortcuts can be dropped. */
+enum class SlotArea { Grid, Dock }
+
 private val IconSize = 48.dp
+private val GridCellHeight = 96.dp
+private const val DockSize = 4
 
 @Composable
 fun HomeScreen(
     apps: List<AppEntry>,
-    dock: Dock,
+    grid: AppSlots,
+    gridColumns: Int,
+    dock: AppSlots,
     drawerState: DrawerState,
     repository: AppRepository,
     onDrawerStateChange: (DrawerState) -> Unit,
-    onPlace: (index: Int, key: String) -> Unit,
-    onRemove: (index: Int) -> Unit,
+    onPlace: (area: SlotArea, index: Int, key: String) -> Unit,
+    onRemove: (area: SlotArea, index: Int) -> Unit,
     inputArea: @Composable () -> Unit,
 ) {
+    val onDragEnded = { if (drawerState == DrawerState.Dragging) onDrawerStateChange(DrawerState.Closed) }
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        // Home area: wallpaper for now; the drawer opens over it.
+        // Home area: the shortcut grid, with the drawer opening over it.
         Box(Modifier.weight(1f).fillMaxWidth()) {
+            HomeGrid(
+                slots = grid,
+                apps = apps,
+                columns = gridColumns,
+                dragging = drawerState == DrawerState.Dragging,
+                repository = repository,
+                onPlace = { index, key -> onPlace(SlotArea.Grid, index, key) },
+                onRemove = { index -> onRemove(SlotArea.Grid, index) },
+                onDragEnded = onDragEnded,
+            )
             DrawerOverlay(apps, drawerState, repository, onDrawerStateChange)
         }
         // Always shown between the home area and the dock.
         inputArea()
         DockBar(
-            slots = dock.resolve(apps),
+            slots = dock.resolve(apps, DockSize),
+            dragging = drawerState == DrawerState.Dragging,
             repository = repository,
             onDrawerToggle = {
                 onDrawerStateChange(if (drawerState == DrawerState.Closed) DrawerState.Open else DrawerState.Closed)
             },
-            onPlace = onPlace,
-            onRemove = onRemove,
-            onDragEnded = { if (drawerState == DrawerState.Dragging) onDrawerStateChange(DrawerState.Closed) },
+            onPlace = { index, key -> onPlace(SlotArea.Dock, index, key) },
+            onRemove = { index -> onRemove(SlotArea.Dock, index) },
+            onDragEnded = onDragEnded,
         )
+    }
+}
+
+/** [columns] across; as many rows as fit the available height. Cells are numbered row by row. */
+@Composable
+private fun HomeGrid(
+    slots: AppSlots,
+    apps: List<AppEntry>,
+    columns: Int,
+    dragging: Boolean,
+    repository: AppRepository,
+    onPlace: (index: Int, key: String) -> Unit,
+    onRemove: (index: Int) -> Unit,
+    onDragEnded: () -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 8.dp)) {
+        val rows = (maxHeight / GridCellHeight).toInt().coerceAtLeast(1)
+        val cells = slots.resolve(apps, rows * columns)
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
+            for (row in 0 until rows) {
+                Row(Modifier.fillMaxWidth().height(GridCellHeight)) {
+                    for (col in 0 until columns) {
+                        val index = row * columns + col
+                        AppSlot(
+                            index = index,
+                            app = cells[index],
+                            description = "Home cell ${row + 1}, ${col + 1}",
+                            showLabel = true,
+                            showEmptyOutline = dragging,
+                            emphasizeOutline = dragging,
+                            repository = repository,
+                            onPlace = onPlace,
+                            onRemove = onRemove,
+                            onDragEnded = onDragEnded,
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -189,13 +251,14 @@ private fun Modifier.appDragSource(key: String, label: String, onTap: () -> Unit
 @Composable
 private fun DockBar(
     slots: List<AppEntry?>,
+    dragging: Boolean,
     repository: AppRepository,
     onDrawerToggle: () -> Unit,
     onPlace: (index: Int, key: String) -> Unit,
     onRemove: (index: Int) -> Unit,
     onDragEnded: () -> Unit,
 ) {
-    val half = Dock.SIZE / 2
+    val half = slots.size / 2
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -206,9 +269,14 @@ private fun DockBar(
                     DrawerButton(onClick = onDrawerToggle)
                 }
             }
-            DockSlot(
+            AppSlot(
                 index = index,
                 app = app,
+                description = "Dock slot ${index + 1}",
+                showLabel = false,
+                // Dock slots always show, so it's clear where shortcuts go; the grid only shows them mid-drag.
+                showEmptyOutline = true,
+                emphasizeOutline = dragging,
                 repository = repository,
                 onPlace = onPlace,
                 onRemove = onRemove,
@@ -219,15 +287,20 @@ private fun DockBar(
     }
 }
 
+/** One drop target cell: shows an app (tap launches, long-press offers Remove) or an empty outline. */
 @Composable
-private fun DockSlot(
+private fun AppSlot(
     index: Int,
     app: AppEntry?,
+    description: String,
+    showLabel: Boolean,
+    showEmptyOutline: Boolean,
     repository: AppRepository,
     onPlace: (index: Int, key: String) -> Unit,
     onRemove: (index: Int) -> Unit,
     onDragEnded: () -> Unit,
     modifier: Modifier,
+    emphasizeOutline: Boolean = false,
 ) {
     var highlighted by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -256,20 +329,26 @@ private fun DockSlot(
                 shouldStartDragAndDrop = { it.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN) },
                 target = target,
             )
-            .semantics { contentDescription = "Dock slot ${index + 1}" },
+            .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        val ring = if (highlighted) Color.White else Color.White.copy(alpha = 0.35f)
+        val ring = when {
+            highlighted -> Color.White
+            emphasizeOutline -> Color.White.copy(alpha = 0.6f)
+            else -> Color.White.copy(alpha = 0.35f)
+        }
+        // Labeled icons are taller than wide, so they get a rounded box rather than a circle.
+        val highlightShape = if (showLabel) RoundedCornerShape(16.dp) else CircleShape
         if (app == null) {
-            Box(Modifier.size(IconSize).border(1.5.dp, ring, CircleShape))
+            if (showEmptyOutline || highlighted) EmptyIcon(ring, showLabel)
         } else {
             Box {
                 AppIcon(
                     app = app,
                     repository = repository,
-                    showLabel = false,
+                    showLabel = showLabel,
                     modifier = Modifier
-                        .then(if (highlighted) Modifier.border(2.dp, ring, CircleShape) else Modifier)
+                        .then(if (highlighted) Modifier.border(2.dp, ring, highlightShape) else Modifier)
                         .combinedClickable(
                             onClick = { repository.launch(app) },
                             onLongClick = { menuOpen = true },
@@ -319,14 +398,26 @@ private fun AppIcon(
     showLabel: Boolean = true,
 ) {
     val icon = remember(app.key) { repository.loadIcon(app).toBitmap().asImageBitmap() }
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier.padding(4.dp).semantics { contentDescription = app.label },
-    ) {
+    IconLayout(label = app.label, showLabel = showLabel, modifier = modifier.semantics { contentDescription = app.label }) {
         Image(bitmap = icon, contentDescription = null, modifier = Modifier.size(IconSize))
+    }
+}
+
+/** Empty-cell outline, laid out exactly like an [AppIcon] so it sits where the icon will appear. */
+@Composable
+private fun EmptyIcon(ring: Color, showLabel: Boolean) {
+    IconLayout(label = "", showLabel = showLabel) {
+        Box(Modifier.size(IconSize).border(1.5.dp, ring, CircleShape))
+    }
+}
+
+@Composable
+private fun IconLayout(label: String, showLabel: Boolean, modifier: Modifier = Modifier, icon: @Composable () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.padding(4.dp)) {
+        icon()
         if (showLabel) {
             Text(
-                text = app.label,
+                text = label,
                 color = Color.White,
                 // Shadow keeps labels readable on light wallpaper.
                 style = MaterialTheme.typography.labelSmall.copy(
