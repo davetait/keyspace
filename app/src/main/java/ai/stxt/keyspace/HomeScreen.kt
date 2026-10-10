@@ -1,6 +1,17 @@
 package ai.stxt.keyspace
 
 import android.content.ClipData
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.key
+import androidx.compose.runtime.LaunchedEffect
+import android.view.View
+import android.appwidget.AppWidgetManager
+import androidx.compose.ui.unit.round
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.gestures.detectTapGestures
 import android.content.ClipDescription
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -72,7 +83,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 
-enum class DrawerState { Closed, Open, Dragging }
+/** Which panel covers the home area. */
+enum class Overlay { None, Apps, Widgets }
+
+/**
+ * [dragging]: a drag from the open panel is in progress. The panel then stays composed (so the drag isn't
+ * cancelled) but is invisible, revealing the drop targets.
+ */
+data class DrawerState(val overlay: Overlay = Overlay.None, val dragging: Boolean = false) {
+    val isOpen: Boolean get() = overlay != Overlay.None && !dragging
+
+    companion object {
+        val Closed = DrawerState()
+    }
+}
 
 /** The two places app shortcuts can be dropped. */
 enum class SlotArea { Grid, Dock }
@@ -95,9 +119,11 @@ fun HomeScreen(
     onRemove: (area: SlotArea, index: Int) -> Unit,
     results: List<AppEntry>?,
     onLaunchResult: (AppEntry) -> Unit,
+    homeMenu: HomeMenuActions,
+    widgets: WidgetsUi,
     inputArea: @Composable () -> Unit,
 ) {
-    val onDragEnded = { if (drawerState == DrawerState.Dragging) onDrawerStateChange(DrawerState.Closed) }
+    val onDragEnded = { if (drawerState.dragging) onDrawerStateChange(DrawerState.Closed) }
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         // Home area: the shortcut grid, with the drawer opening over it.
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -105,25 +131,35 @@ fun HomeScreen(
                 slots = grid,
                 apps = apps,
                 columns = gridColumns,
-                dragging = drawerState == DrawerState.Dragging,
+                dragging = drawerState.dragging,
                 repository = repository,
                 onPlace = { index, key -> onPlace(SlotArea.Grid, index, key) },
                 onRemove = { index -> onRemove(SlotArea.Grid, index) },
                 onDragEnded = onDragEnded,
                 // A drag needs the grid's drop targets, so it takes priority over search results.
-                results = results.takeIf { drawerState != DrawerState.Dragging },
+                results = results.takeIf { !drawerState.dragging },
                 onLaunchResult = onLaunchResult,
+                homeMenu = homeMenu,
+                widgets = widgets,
             )
             DrawerOverlay(apps, drawerState, repository, onDrawerStateChange)
+            PanelOverlay(visible = drawerState.overlay == Overlay.Widgets, dragging = drawerState.dragging) { modifier ->
+                WidgetPicker(
+                    choices = widgets.choices,
+                    grid = widgets.metrics,
+                    onDragStart = { onDrawerStateChange(DrawerState(Overlay.Widgets, dragging = true)) },
+                    modifier = modifier,
+                )
+            }
         }
         // Always shown between the home area and the dock.
         inputArea()
         DockBar(
             slots = dock.resolve(apps, DockSize),
-            dragging = drawerState == DrawerState.Dragging,
+            dragging = drawerState.dragging,
             repository = repository,
             onDrawerToggle = {
-                onDrawerStateChange(if (drawerState == DrawerState.Closed) DrawerState.Open else DrawerState.Closed)
+                onDrawerStateChange(if (drawerState.overlay == Overlay.None) DrawerState(Overlay.Apps) else DrawerState.Closed)
             },
             onPlace = { index, key -> onPlace(SlotArea.Dock, index, key) },
             onRemove = { index -> onRemove(SlotArea.Dock, index) },
@@ -149,12 +185,30 @@ private fun HomeGrid(
     onDragEnded: () -> Unit,
     results: List<AppEntry>?,
     onLaunchResult: (AppEntry) -> Unit,
+    homeMenu: HomeMenuActions,
+    widgets: WidgetsUi,
 ) {
-    BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 8.dp)) {
+    // Where the home menu was requested; null when closed.
+    var menuAt by remember { mutableStateOf<Offset?>(null) }
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            // Long-press on empty space. Icons consume their own long-press (Remove), so they never reach this.
+            .pointerInput(Unit) { detectTapGestures(onLongPress = { menuAt = it }) }
+            .padding(horizontal = 8.dp, vertical = 8.dp)
+    ) {
+        // Fixed geometry (rows share the height evenly) so widgets can be positioned by cell.
         val rows = (maxHeight / GridCellHeight).toInt().coerceAtLeast(1)
+        val cellWidth = maxWidth / columns
+        val cellHeight = maxHeight / rows
+        val metrics = GridMetrics(columns, rows, cellWidth.value, cellHeight.value)
+        LaunchedEffect(metrics) { widgets.onMetrics(metrics) }
+
         val cells = slots.resolve(apps, rows * columns)
         val resultRows = results?.let { bottomUpRows(it, columns, minOf(ResultRows, rows)) }
         val searching = resultRows != null
+        val shownWidgets = visibleWidgets(widgets.placed, columns, rows)
+        val coveredCells = shownWidgets.flatMap { it.cells(columns) }.toSet()
 
         // The shortcut grid always stays composed, even while searching (then invisible and inert): a drag
         // only reaches drop targets that exist when it starts, and a drag can start while text is typed.
@@ -164,17 +218,33 @@ private fun HomeGrid(
                 val index = row * columns + col
                 AppSlot(
                     index = index,
-                    app = cells[index],
+                    // Cells under a widget hide their app (kept in storage) and refuse app drops.
+                    app = cells[index].takeIf { index !in coveredCells },
                     description = "Home cell ${row + 1}, ${col + 1}",
                     showLabel = true,
-                    showEmptyOutline = dragging,
+                    showEmptyOutline = dragging && index !in coveredCells,
                     emphasizeOutline = dragging,
                     interactive = !searching,
+                    acceptsApps = index !in coveredCells,
+                    onWidgetDrop = { provider -> widgets.onDrop(row, col, provider, metrics) },
                     repository = repository,
                     onPlace = onPlace,
                     onRemove = onRemove,
                     onDragEnded = onDragEnded,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
+                )
+            }
+        }
+        shownWidgets.forEach { widget ->
+            key(widget.id) {
+                WidgetCell(
+                    widget = widget,
+                    host = widgets.host,
+                    cellWidth = cellWidth,
+                    cellHeight = cellHeight,
+                    // Hidden (and untouchable) behind search results.
+                    visible = !searching,
+                    onRemove = { widgets.onRemove(widget.id) },
                 )
             }
         }
@@ -187,13 +257,43 @@ private fun HomeGrid(
             }
         }
     }
+    HomeMenu(at = menuAt, actions = homeMenu, onDismiss = { menuAt = null })
+}
+
+/** What the home long-press menu offers. */
+class HomeMenuActions(
+    val onWallpaper: () -> Unit,
+    val onWidgets: () -> Unit,
+    val onSettings: () -> Unit,
+)
+
+@Composable
+private fun HomeMenu(at: Offset?, actions: HomeMenuActions, onDismiss: () -> Unit) {
+    // Anchor the dropdown at the press point.
+    Box(Modifier.offset { at?.round() ?: IntOffset.Zero }) {
+        DropdownMenu(expanded = at != null, onDismissRequest = onDismiss) {
+            listOf(
+                "Wallpaper" to actions.onWallpaper,
+                "Widgets" to actions.onWidgets,
+                "Settings" to actions.onSettings,
+            ).forEach { (label, action) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onDismiss()
+                        action()
+                    },
+                )
+            }
+        }
+    }
 }
 
 @Composable
 private fun GridRows(rows: Int, modifier: Modifier = Modifier, row: @Composable RowScope.(Int) -> Unit) {
-    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
+    Column(modifier.fillMaxSize()) {
         for (index in 0 until rows) {
-            Row(Modifier.fillMaxWidth().height(GridCellHeight)) { row(index) }
+            Row(Modifier.fillMaxWidth().weight(1f)) { row(index) }
         }
     }
 }
@@ -215,22 +315,29 @@ private fun DrawerOverlay(
     repository: AppRepository,
     onDrawerStateChange: (DrawerState) -> Unit,
 ) {
-    AnimatedVisibility(
-        visible = drawerState != DrawerState.Closed,
-        enter = slideInVertically { it } + fadeIn(),
-        exit = slideOutVertically { it } + fadeOut(),
-    ) {
-        // While dragging, the drawer stays composed (so the drag isn't cancelled) but is invisible.
+    PanelOverlay(visible = drawerState.overlay == Overlay.Apps, dragging = drawerState.dragging) { modifier ->
         AppDrawer(
             apps = apps,
             repository = repository,
-            modifier = Modifier.alpha(if (drawerState == DrawerState.Dragging) 0f else 1f),
+            modifier = modifier,
             onLaunch = { app ->
                 repository.launch(app)
                 onDrawerStateChange(DrawerState.Closed)
             },
-            onDragStart = { onDrawerStateChange(DrawerState.Dragging) },
+            onDragStart = { onDrawerStateChange(DrawerState(Overlay.Apps, dragging = true)) },
         )
+    }
+}
+
+/** Slides a panel over the home area. While [dragging], it stays composed but invisible (see [DrawerState]). */
+@Composable
+private fun PanelOverlay(visible: Boolean, dragging: Boolean, content: @Composable (Modifier) -> Unit) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically { it } + fadeIn(),
+        exit = slideOutVertically { it } + fadeOut(),
+    ) {
+        content(Modifier.alpha(if (dragging) 0f else 1f))
     }
 }
 
@@ -347,12 +454,18 @@ private fun AppSlot(
     emphasizeOutline: Boolean = false,
     /** False while hidden behind search results: stays a drop target but ignores taps. */
     interactive: Boolean = true,
+    /** False for cells under a widget. */
+    acceptsApps: Boolean = true,
+    /** Handles a widget dropped with its top-left on this cell; null where widgets can't go (the dock). */
+    onWidgetDrop: ((provider: String) -> Boolean)? = null,
 ) {
     var highlighted by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     // The target object is remembered, so read the latest callbacks rather than the first ones captured.
     val currentOnPlace by rememberUpdatedState(onPlace)
     val currentOnDragEnded by rememberUpdatedState(onDragEnded)
+    val currentAcceptsApps by rememberUpdatedState(acceptsApps)
+    val currentOnWidgetDrop by rememberUpdatedState(onWidgetDrop)
     val target = remember(index) {
         object : DragAndDropTarget {
             override fun onEntered(event: DragAndDropEvent) { highlighted = true }
@@ -362,8 +475,11 @@ private fun AppSlot(
                 currentOnDragEnded()
             }
             override fun onDrop(event: DragAndDropEvent): Boolean {
-                val key = event.toAndroidDragEvent().clipData?.getItemAt(0)?.text?.toString() ?: return false
-                currentOnPlace(index, key)
+                val dragEvent = event.toAndroidDragEvent()
+                val text = dragEvent.clipData?.getItemAt(0)?.text?.toString() ?: return false
+                if (dragEvent.clipDescription?.label == WIDGET_CLIP_LABEL) return currentOnWidgetDrop?.invoke(text) ?: false
+                if (!currentAcceptsApps) return false
+                currentOnPlace(index, text)
                 return true
             }
         }
@@ -372,7 +488,10 @@ private fun AppSlot(
     Box(
         modifier = modifier
             .dragAndDropTarget(
-                shouldStartDragAndDrop = { it.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN) },
+                shouldStartDragAndDrop = { event ->
+                    val isWidget = event.toAndroidDragEvent().clipDescription?.label == WIDGET_CLIP_LABEL
+                    event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN) && (!isWidget || onWidgetDrop != null)
+                },
                 target = target,
             )
             .semantics { contentDescription = description },
@@ -479,6 +598,76 @@ private fun IconLayout(label: String, showLabel: Boolean, modifier: Modifier = M
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/** Everything the home grid needs to show and accept widgets. */
+class WidgetsUi(
+    val host: KeyspaceWidgetHost,
+    val placed: List<PlacedWidget>,
+    val choices: List<WidgetChoice>,
+    val metrics: GridMetrics?,
+    val onMetrics: (GridMetrics) -> Unit,
+    /** A widget [provider] was dropped with its top-left at [row]/[col]; returns whether it was accepted. */
+    val onDrop: (row: Int, col: Int, provider: String, grid: GridMetrics) -> Boolean,
+    val onRemove: (id: Int) -> Unit,
+)
+
+@Composable
+private fun WidgetCell(
+    widget: PlacedWidget,
+    host: KeyspaceWidgetHost,
+    cellWidth: Dp,
+    cellHeight: Dp,
+    visible: Boolean,
+    onRemove: () -> Unit,
+) {
+    val context = LocalContext.current
+    val info = remember(widget.id) { AppWidgetManager.getInstance(context).getAppWidgetInfo(widget.id) }
+    var menuOpen by remember { mutableStateOf(false) }
+    val width = cellWidth * widget.spanX
+    val height = cellHeight * widget.spanY
+    Box(
+        Modifier
+            .offset(x = cellWidth * widget.col, y = cellHeight * widget.row)
+            .size(width, height)
+            .padding(4.dp)
+    ) {
+        if (info == null) {
+            // The widget's app was uninstalled; leave a removable placeholder rather than a silent gap.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.Black.copy(alpha = 0.4f))
+                    .combinedClickable(onClick = {}, onLongClick = { menuOpen = true }),
+                contentAlignment = Alignment.Center,
+            ) { Text("Widget unavailable", color = Color.White, style = MaterialTheme.typography.labelSmall) }
+        } else {
+            AndroidView(
+                factory = { ctx -> host.createView(ctx, widget.id, info) as KeyspaceWidgetHostView },
+                update = { view ->
+                    view.onLongPress = { menuOpen = true }
+                    view.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+                    // Only tell the widget its size when it changes; each call makes the widget redraw.
+                    val size = width.value to height.value
+                    if (view.tag != size) {
+                        view.tag = size
+                        view.setSizeDp(width.value, height.value)
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            DropdownMenuItem(
+                text = { Text("Remove") },
+                onClick = {
+                    menuOpen = false
+                    onRemove()
+                },
             )
         }
     }

@@ -1,8 +1,14 @@
 package ai.stxt.keyspace
 
 import android.Manifest
+import android.os.Build
+import android.content.ComponentName
+import android.appwidget.AppWidgetProviderInfo
+import android.appwidget.AppWidgetManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -13,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,18 +30,59 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
+    /** Bumped each time Home is pressed while Keyspace is already the current activity. */
+    private val homePresses = MutableStateFlow(0)
+
+    private lateinit var widgetHost: KeyspaceWidgetHost
+    private lateinit var widgetStore: WidgetStore
+    /** A widget being added: its id is allocated, waiting on the bind permission or configure screen. */
+    private var pendingWidget: PlacedWidget? = null
+    /** Messages from the widget add flow, shown in the typed line. */
+    private val widgetMessages = MutableStateFlow<String?>(null)
+
+    private val bindWidget = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val pending = pendingWidget ?: return@registerForActivityResult
+        if (result.resultCode == RESULT_OK) configureOrFinishWidget(pending) else cancelWidget(pending, null)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.hasCategory(Intent.CATEGORY_HOME)) homePresses.value++
+    }
+
+    override fun onStart() {
+        super.onStart()
+        widgetHost.startListening()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        widgetHost.stopListening()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        pendingWidget?.let { outState.putIntArray(PENDING_WIDGET, intArrayOf(it.id, it.row, it.col, it.spanX, it.spanY)) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        widgetHost = KeyspaceWidgetHost(applicationContext)
+        widgetStore = WidgetStore(applicationContext)
+        pendingWidget = savedInstanceState?.getIntArray(PENDING_WIDGET)?.let { PlacedWidget(it[0], it[1], it[2], it[3], it[4]) }
+        widgetHost.deleteOrphans(keep = widgetStore.widgets.value.map { it.id }.toSet() + listOfNotNull(pendingWidget?.id))
         val repository = AppRepository(applicationContext)
         val gridStore = SlotStore(applicationContext, "grid")
         val dockStore = SlotStore(applicationContext, "dock")
         val stores = mapOf(SlotArea.Grid to gridStore, SlotArea.Dock to dockStore)
         val launchStats = LaunchStats(applicationContext)
+        val settingsStore = SettingsStore(applicationContext)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
@@ -47,9 +95,26 @@ class MainActivity : ComponentActivity() {
                 var status by remember { mutableStateOf<String?>(null) }
                 var listening by remember { mutableStateOf(false) }
 
+                val placedWidgets by widgetStore.widgets.collectAsState()
+                var widgetChoices by remember { mutableStateOf(emptyList<WidgetChoice>()) }
+                var gridMetrics by remember { mutableStateOf<GridMetrics?>(null) }
+                LaunchedEffect(drawerState.overlay) {
+                    if (drawerState.overlay == Overlay.Widgets) widgetChoices = loadWidgetChoices(this@MainActivity)
+                }
+                val widgetMessage by widgetMessages.collectAsState()
+                LaunchedEffect(widgetMessage) {
+                    widgetMessage?.let { status = it }
+                    widgetMessages.value = null
+                }
+
+                val settings by settingsStore.settings.collectAsState()
+                var showSettings by rememberSaveable { mutableStateOf(false) }
+                // Refreshed on resume, e.g. after returning from the system Home app screen.
+                var isHome by remember { mutableStateOf(isDefaultHome()) }
                 val usage by launchStats.usage.collectAsState()
-                val results = remember(apps, typed, usage) {
-                    if (typed.isBlank()) null else searchApps(apps, typed, usage, System.currentTimeMillis())
+                val halfLife = settings.adaptSpeed.halfLifeDays
+                val results = remember(apps, typed, usage, halfLife) {
+                    if (typed.isBlank()) null else searchApps(apps, typed, usage, System.currentTimeMillis(), halfLife)
                 }
 
                 val speech = remember {
@@ -70,15 +135,38 @@ class MainActivity : ComponentActivity() {
                 LifecycleResumeEffect(Unit) {
                     val scope = MainScope()
                     scope.launch { apps = repository.loadApps() }
+                    isHome = isDefaultHome()
                     onPauseOrDispose {
                         scope.cancel()
                         speech.stop()
                     }
                 }
 
+                if (showSettings) {
+                    SettingsDialog(
+                        settings = settings,
+                        isDefaultHome = isHome,
+                        onColumnsChange = settingsStore::setColumns,
+                        onAdaptSpeedChange = settingsStore::setAdaptSpeed,
+                        onClearSearchHistory = launchStats::clear,
+                        onOpenHomeSettings = { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) },
+                        onDismiss = { showSettings = false },
+                    )
+                }
+
                 // Search results show in the home area, which the open drawer would cover.
                 fun closeDrawerForInput() {
-                    if (drawerState == DrawerState.Open) drawerState = DrawerState.Closed
+                    if (drawerState.isOpen) drawerState = DrawerState.Closed
+                }
+
+                // Home resets the home screen: closes overlays and clears the search.
+                val homePressCount by homePresses.collectAsState()
+                LaunchedEffect(homePressCount) {
+                    if (homePressCount == 0) return@LaunchedEffect
+                    drawerState = DrawerState.Closed
+                    showSettings = false
+                    typed = ""
+                    status = null
                 }
 
                 // Back closes the drawer; on the bare home screen there is nothing to go back to.
@@ -87,8 +175,7 @@ class MainActivity : ComponentActivity() {
                 HomeScreen(
                     apps = apps,
                     grid = grid,
-                    // Fixed for now; will become a setting.
-                    gridColumns = 5,
+                    gridColumns = settings.columns,
                     dock = dock,
                     drawerState = drawerState,
                     repository = repository,
@@ -98,9 +185,41 @@ class MainActivity : ComponentActivity() {
                     results = results,
                     onLaunchResult = { app ->
                         repository.launch(app)
-                        launchStats.record(app.key)
+                        launchStats.record(app.key, halfLife)
                         typed = ""
                     },
+                    homeMenu = HomeMenuActions(
+                        onWallpaper = { openWallpaperPicker() },
+                        onWidgets = { drawerState = DrawerState(Overlay.Widgets) },
+                        onSettings = { showSettings = true },
+                    ),
+                    widgets = WidgetsUi(
+                        host = widgetHost,
+                        placed = placedWidgets,
+                        choices = widgetChoices,
+                        metrics = gridMetrics,
+                        onMetrics = { gridMetrics = it },
+                        onDrop = { row, col, provider, metrics ->
+                            val choice = widgetChoices.firstOrNull { it.provider.flattenToString() == provider }
+                            val (spanX, spanY) = choice?.let {
+                                spanFor(it.minWidthDp, it.minHeightDp, it.targetCellsX, it.targetCellsY, metrics)
+                            } ?: (1 to 1)
+                            val appCells = grid.resolve(apps, metrics.rows * metrics.columns)
+                                .mapIndexedNotNull { index, app -> index.takeIf { app != null } }
+                                .toSet()
+                            if (canPlace(row, col, spanX, spanY, metrics.columns, metrics.rows, placedWidgets, appCells)) {
+                                addWidget(ComponentName.unflattenFromString(provider)!!, PlacedWidget(-1, row, col, spanX, spanY))
+                                true
+                            } else {
+                                status = "Not enough room there"
+                                false
+                            }
+                        },
+                        onRemove = { id ->
+                            widgetStore.remove(id)
+                            widgetHost.deleteAppWidgetId(id)
+                        },
+                    ),
                 ) {
                     Column {
                         TypedLine(text = typed, status = status)
@@ -131,5 +250,62 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /** Step 1 of adding a widget: allocate an id and bind it, asking the user for permission if needed. */
+    private fun addWidget(provider: ComponentName, at: PlacedWidget) {
+        val pending = at.copy(id = widgetHost.allocateAppWidgetId())
+        pendingWidget = pending
+        if (AppWidgetManager.getInstance(this).bindAppWidgetIdIfAllowed(pending.id, provider)) {
+            configureOrFinishWidget(pending)
+        } else {
+            bindWidget.launch(
+                Intent(AppWidgetManager.ACTION_APPWIDGET_BIND)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, pending.id)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, provider)
+            )
+        }
+    }
+
+    /** Step 2: open the widget's own setup screen if it has a required one; otherwise place it. */
+    private fun configureOrFinishWidget(pending: PlacedWidget) {
+        val info = AppWidgetManager.getInstance(this).getAppWidgetInfo(pending.id)
+            ?: return cancelWidget(pending, "Couldn't add widget")
+        val configOptional = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            info.widgetFeatures and AppWidgetProviderInfo.WIDGET_FEATURE_CONFIGURATION_OPTIONAL != 0
+        if (info.configure == null || configOptional) return finishWidget(pending)
+        try {
+            // The documented launcher route; it reports back through onActivityResult.
+            widgetHost.startAppWidgetConfigureActivityForResult(this, pending.id, 0, REQUEST_CONFIGURE_WIDGET, null)
+        } catch (e: Exception) {
+            // ActivityNotFoundException or SecurityException from a broken provider.
+            cancelWidget(pending, "Couldn't open widget setup")
+        }
+    }
+
+    // AppWidgetHost.startAppWidgetConfigureActivityForResult only reports here; it has no Activity Result API form.
+    @Deprecated("Needed for AppWidgetHost.startAppWidgetConfigureActivityForResult")
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_CONFIGURE_WIDGET) return
+        val pending = pendingWidget ?: return
+        if (resultCode == RESULT_OK) finishWidget(pending) else cancelWidget(pending, null)
+    }
+
+    private fun finishWidget(pending: PlacedWidget) {
+        widgetStore.add(pending)
+        pendingWidget = null
+    }
+
+    private fun cancelWidget(pending: PlacedWidget, message: String?) {
+        widgetHost.deleteAppWidgetId(pending.id)
+        pendingWidget = null
+        widgetMessages.value = message
+    }
+
+    private companion object {
+        const val PENDING_WIDGET = "pending_widget"
+        const val REQUEST_CONFIGURE_WIDGET = 1
     }
 }

@@ -7,13 +7,19 @@ package ai.stxt.keyspace
  * then whole-label matches before later-word matches ("p": Phone before Google Photos), then alphabetical.
  * A blank query matches nothing.
  */
-fun searchApps(apps: List<AppEntry>, query: String, usage: Map<String, AppUsage>, nowMillis: Long): List<AppEntry> {
+fun searchApps(
+    apps: List<AppEntry>,
+    query: String,
+    usage: Map<String, AppUsage>,
+    nowMillis: Long,
+    halfLifeDays: Double = AppUsage.DEFAULT_HALF_LIFE_DAYS,
+): List<AppEntry> {
     val q = query.trimStart().lowercase()
     if (q.isBlank()) return emptyList()
     return apps
         .mapNotNull { app -> matchTier(app.label.lowercase(), q)?.let { tier -> app to tier } }
         .sortedWith(
-            compareByDescending<Pair<AppEntry, Int>> { (app, _) -> usage[app.key]?.rankAt(nowMillis) ?: Double.NEGATIVE_INFINITY }
+            compareByDescending<Pair<AppEntry, Int>> { (app, _) -> usage[app.key]?.rankAt(nowMillis, halfLifeDays) ?: Double.NEGATIVE_INFINITY }
                 .thenBy { (_, tier) -> tier }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { (app, _) -> app.label }
         )

@@ -13,11 +13,17 @@ class LaunchStats(private val context: Context) {
     private val _usage = MutableStateFlow(load())
     val usage: StateFlow<Map<String, AppUsage>> = _usage.asStateFlow()
 
-    fun record(key: String) {
+    fun record(key: String, halfLifeDays: Double) {
         val now = System.currentTimeMillis()
-        val updated = _usage.value[key]?.recordLaunch(now) ?: AppUsage.firstLaunch(now)
+        val updated = _usage.value[key]?.recordLaunch(now, halfLifeDays) ?: AppUsage.firstLaunch(now)
         _usage.value = _usage.value + (key to updated)
         prefs.edit { putString(key, "${updated.score};${updated.updatedAtMillis}") }
+    }
+
+    /** Forgets all search history, so ranking falls back to alphabetical. */
+    fun clear() {
+        _usage.value = emptyMap()
+        prefs.edit { clear() }
     }
 
     private fun load(): Map<String, AppUsage> {

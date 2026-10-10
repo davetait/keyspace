@@ -10,6 +10,10 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- Wallpaper option: find the system wallpaper picker. -->
+        <intent>
+            <action android:name="android.intent.action.SET_WALLPAPER" />
+        </intent>
         <!-- Needed for SpeechRecognizer to find the system recognition service (Android 11+). -->
         <intent>
             <action android:name="android.speech.RecognitionService" />
