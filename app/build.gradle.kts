@@ -3,6 +3,21 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Version: bump MAJOR/MINOR by hand for meaningful releases. The build number is the number of git commits on
+// this branch, so every commit automatically gets a higher versionCode (which Android needs to install an
+// update) and a distinct versionName. Falls back to 1 outside a git checkout.
+val versionMajorMinor = "0.1"
+val buildNumber: Int = providers.exec {
+    commandLine("git", "rev-list", "--count", "HEAD")
+    isIgnoreExitValue = true
+}.standardOutput.asText.get().trim().toIntOrNull() ?: 1
+val appVersionName = "$versionMajorMinor.$buildNumber"
+
+// APKs are named keyspace-<version>-<buildType>.apk (e.g. keyspace-0.1.17-debug.apk) instead of app-debug.apk.
+base {
+    archivesName = "keyspace-$appVersionName"
+}
+
 android {
     namespace = "ai.stxt.keyspace"
     compileSdk = 37
@@ -11,8 +26,8 @@ android {
         applicationId = "ai.stxt.keyspace"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = buildNumber
+        versionName = appVersionName
     }
 
     buildTypes {
