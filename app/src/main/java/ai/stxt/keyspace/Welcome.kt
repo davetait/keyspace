@@ -7,6 +7,7 @@ import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,7 +35,13 @@ fun Context.setAsHomeIntent(): Intent {
 
 /** Shown until Keyspace is the home app or the user picks "Not now". */
 @Composable
-fun WelcomeCard(onSetAsHome: () -> Unit, onNotNow: () -> Unit, modifier: Modifier = Modifier) {
+fun WelcomeCard(
+    onSetAsHome: () -> Unit,
+    onNotNow: () -> Unit,
+    /** Offers Keyspace's wallpaper; null once it's been set from here. */
+    onUseWallpaper: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
     Surface(
         shape = KeyspaceTokens.PanelShape,
         color = KeyspaceColors.panel,
@@ -48,6 +55,11 @@ fun WelcomeCard(onSetAsHome: () -> Unit, onNotNow: () -> Unit, modifier: Modifie
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (onUseWallpaper != null) {
+                TextButton(onClick = onUseWallpaper, contentPadding = PaddingValues(0.dp)) { Text("Use the Keyspace wallpaper") }
+            } else {
+                Text("Keyspace wallpaper set", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Row(Modifier.fillMaxWidth()) {
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onNotNow) { Text("Not now") }

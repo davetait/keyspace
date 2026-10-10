@@ -91,6 +91,17 @@ class MainActivity : ComponentActivity() {
         widgetHost.startListening()
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        centerWallpaper()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Again on resume: the wallpaper may have changed while Keyspace was in the background.
+        centerWallpaper()
+    }
+
     override fun onStop() {
         super.onStop()
         widgetHost.stopListening()
@@ -192,6 +203,15 @@ class MainActivity : ComponentActivity() {
                 // Refreshed on resume, e.g. after returning from the system Home app screen.
                 var isHome by remember { mutableStateOf(isDefaultHome()) }
                 val welcomeDismissed by settingsStore.welcomeDismissed.collectAsState()
+                // Saveable: setting a wallpaper changes the theme colors, which makes Android restart this screen.
+                var wallpaperSet by rememberSaveable { mutableStateOf(false) }
+                val wallpaperScope = rememberCoroutineScope()
+                fun useKeyspaceWallpaper() {
+                    wallpaperScope.launch {
+                        wallpaperSet = applyKeyspaceWallpaper()
+                        status = if (wallpaperSet) "Keyspace wallpaper set" else "Couldn't set the wallpaper on this device"
+                    }
+                }
                 val usage by launchStats.usage.collectAsState()
                 val halfLife = settings.adaptSpeed.halfLifeDays
                 val results = remember(apps, typed, usage, halfLife) {
@@ -349,6 +369,7 @@ class MainActivity : ComponentActivity() {
                             onLaunchResult = ::launchResult,
                             homeMenu = HomeMenuActions(
                                 onWallpaper = { openWallpaperPicker() },
+                        onKeyspaceWallpaper = ::useKeyspaceWallpaper,
                                 onWidgets = { drawerState = DrawerState(Overlay.Widgets) },
                                 onSettings = { showSettings = true },
                             ),
@@ -410,6 +431,7 @@ class MainActivity : ComponentActivity() {
                             WelcomeCard(
                                 onSetAsHome = { requestHome.launch(setAsHomeIntent()) },
                                 onNotNow = settingsStore::dismissWelcome,
+                            onUseWallpaper = ::useKeyspaceWallpaper.takeIf { !wallpaperSet },
                                 modifier = Modifier.statusBarsPadding().padding(top = 24.dp),
                             )
                         }

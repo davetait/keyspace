@@ -366,28 +366,31 @@ val LocalNotificationDots = compositionLocalOf<Set<String>?> { null }
 
 /** What the home long-press menu offers. */
 class HomeMenuActions(
+    /** Opens the system wallpaper picker. */
     val onWallpaper: () -> Unit,
+    /** Sets Keyspace's own wallpaper (home screen only). */
+    val onKeyspaceWallpaper: () -> Unit,
     val onWidgets: () -> Unit,
     val onSettings: () -> Unit,
 )
 
 @Composable
 private fun HomeMenu(at: Offset?, actions: HomeMenuActions, onDismiss: () -> Unit) {
+    // "Wallpaper" opens a second step in the same menu: Keyspace's wallpaper, or the system picker.
+    var wallpaperChoices by remember(at) { mutableStateOf(false) }
+    fun item(label: String, action: () -> Unit): @Composable () -> Unit = {
+        DropdownMenuItem(text = { Text(label) }, onClick = { onDismiss(); action() })
+    }
     // Anchor the dropdown at the press point.
     Box(Modifier.offset { at?.round() ?: IntOffset.Zero }) {
         KeyspaceMenu(expanded = at != null, onDismissRequest = onDismiss) {
-            listOf(
-                "Wallpaper" to actions.onWallpaper,
-                "Widgets" to actions.onWidgets,
-                "Settings" to actions.onSettings,
-            ).forEach { (label, action) ->
-                DropdownMenuItem(
-                    text = { Text(label) },
-                    onClick = {
-                        onDismiss()
-                        action()
-                    },
-                )
+            if (wallpaperChoices) {
+                item("Keyspace wallpaper", actions.onKeyspaceWallpaper)()
+                item("Choose another…", actions.onWallpaper)()
+            } else {
+                DropdownMenuItem(text = { Text("Wallpaper") }, onClick = { wallpaperChoices = true })
+                item("Widgets", actions.onWidgets)()
+                item("Settings", actions.onSettings)()
             }
         }
     }

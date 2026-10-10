@@ -4,6 +4,9 @@
     <!-- "Uninstall" in the app menu: lets Android show its uninstall confirmation. -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
+    <!-- "Keyspace wallpaper": set the bundled wallpaper when the user picks it. Granted automatically. -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+
     <!-- Microphone key: speech to text. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
