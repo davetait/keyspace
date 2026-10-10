@@ -30,7 +30,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.DragAndDropTransferData
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
@@ -93,8 +92,8 @@ fun WidgetPicker(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 8.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color.Black.copy(alpha = 0.85f))
+            .clip(KeyspaceTokens.PanelShape)
+            .background(KeyspaceColors.panel)
             .semantics { contentDescription = "Widgets" },
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -102,16 +101,16 @@ fun WidgetPicker(
         item {
             Text(
                 "Long-press a widget and drag it onto the home screen",
-                color = Color.White.copy(alpha = 0.7f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         if (choices.isEmpty()) {
-            item { Text("No widgets installed", color = Color.White) }
+            item { Text("No widgets installed", color = MaterialTheme.colorScheme.onSurface) }
         }
         choices.groupBy { it.appLabel }.forEach { (app, widgets) ->
             item(key = "app:$app") {
-                Text(app, color = Color.White, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                Text(app, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
             }
             items(widgets, key = { it.provider.flattenToString() }) { choice ->
                 WidgetRow(choice, grid, onDragStart)
@@ -143,9 +142,9 @@ private fun WidgetRow(choice: WidgetChoice, grid: GridMetrics?, onDragStart: () 
             )
         }
         Column(Modifier.padding(start = 16.dp).weight(1f)) {
-            Text(choice.label, color = Color.White, style = MaterialTheme.typography.bodyLarge)
+            Text(choice.label, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
             if (span != null) {
-                Text("${span.first} × ${span.second}", color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.bodySmall)
+                Text("${span.first} × ${span.second}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
         }
     }

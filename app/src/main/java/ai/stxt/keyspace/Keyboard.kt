@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -17,7 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,9 +44,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -55,9 +55,6 @@ private val Row2 = "asdfghjkl".toList()
 private val Row3 = "zxcvbnm".toList()
 
 private val KeyHeight = 48.dp
-private val KeyColor = Color.White.copy(alpha = 0.16f)
-private val KeyPressedColor = Color.White.copy(alpha = 0.40f)
-private val MicActiveColor = Color(0xFF4285F4)
 
 /**
  * App-drawn QWERTY keyboard: letters, backspace, microphone. Always shown; it has no hide/close action
@@ -66,6 +63,8 @@ private val MicActiveColor = Color(0xFF4285F4)
 @Composable
 fun Keyboard(
     listening: Boolean,
+    /** Letters that continue at least one app match; the rest are dimmed. Null: nothing typed, all lit. */
+    litKeys: Set<Char>?,
     onLetter: (Char) -> Unit,
     onBackspace: () -> Unit,
     onMic: () -> Unit,
@@ -74,26 +73,29 @@ fun Keyboard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.45f))
+            // No background of its own: the home screen's bottom scrim sits behind it.
             .padding(horizontal = 3.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         // Rows are laid out in 10 units so every row spans the full width and keys line up.
-        KeyRow { Row1.forEach { LetterKey(it, onLetter) } }
+        val isLit = { c: Char -> litKeys == null || c in litKeys }
+        KeyRow { Row1.forEach { LetterKey(it, isLit(it), onLetter) } }
         KeyRow {
             Spacer(Modifier.weight(0.5f))
-            Row2.forEach { LetterKey(it, onLetter) }
+            Row2.forEach { LetterKey(it, isLit(it), onLetter) }
             Spacer(Modifier.weight(0.5f))
         }
         KeyRow {
             Key(
                 description = if (listening) "Stop dictation" else "Dictate",
                 weight = 1.5f,
-                color = if (listening) MicActiveColor else KeyColor,
+                color = if (listening) KeyspaceColors.accent else null,
                 onPress = onMic,
-            ) { MicIcon() }
-            Row3.forEach { LetterKey(it, onLetter) }
-            Key(description = "Backspace", weight = 1.5f, repeatOnHold = true, onPress = onBackspace) { BackspaceIcon() }
+            ) { MicIcon(if (listening) MaterialTheme.colorScheme.onPrimary else KeyspaceColors.keyLit) }
+            Row3.forEach { LetterKey(it, isLit(it), onLetter) }
+            Key(description = "Backspace", weight = 1.5f, repeatOnHold = true, onPress = onBackspace) {
+                BackspaceIcon(KeyspaceColors.keyLit)
+            }
         }
     }
 }
@@ -104,9 +106,15 @@ private fun KeyRow(content: @Composable RowScope.() -> Unit) {
 }
 
 @Composable
-private fun RowScope.LetterKey(letter: Char, onLetter: (Char) -> Unit) {
-    Key(description = letter.toString(), onPress = { onLetter(letter) }) {
-        Text(letter.toString(), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Normal)
+private fun RowScope.LetterKey(letter: Char, lit: Boolean, onLetter: (Char) -> Unit) {
+    // Dimmed keys still type (the user may know better); they just signal that no app continues that way.
+    val legend by animateColorAsState(if (lit) KeyspaceColors.keyLit else KeyspaceColors.keyDim, label = "legend")
+    Key(
+        description = letter.toString(),
+        state = if (lit) null else "No matching apps",
+        onPress = { onLetter(letter) },
+    ) {
+        Text(letter.toString(), color = legend, style = KeyspaceTokens.KeyLegend)
     }
 }
 
@@ -119,7 +127,10 @@ private fun RowScope.Key(
     description: String,
     onPress: () -> Unit,
     weight: Float = 1f,
-    color: Color = KeyColor,
+    /** Null: the standard key fill. */
+    color: Color? = null,
+    /** Spoken by screen readers after the key's name, e.g. that it leads nowhere. */
+    state: String? = null,
     repeatOnHold: Boolean = false,
     content: @Composable () -> Unit,
 ) {
@@ -132,8 +143,8 @@ private fun RowScope.Key(
             .weight(weight)
             .fillMaxSize()
             .padding(horizontal = 3.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (pressed) KeyPressedColor else color)
+            .clip(KeyspaceTokens.SmallShape)
+            .background(if (pressed) KeyspaceColors.keyPressed else color ?: KeyspaceColors.key)
             .pointerInput(repeatOnHold) {
                 // Gesture-handling code can't launch coroutines itself, so the repeat job runs in this outer scope.
                 coroutineScope {
@@ -161,6 +172,7 @@ private fun RowScope.Key(
             }
             .semantics {
                 contentDescription = description
+                if (state != null) stateDescription = state
                 role = Role.Button
                 onClick { currentOnPress(); true }
             },
@@ -169,21 +181,21 @@ private fun RowScope.Key(
 }
 
 @Composable
-private fun MicIcon() {
+private fun MicIcon(color: Color) {
     Canvas(Modifier.size(22.dp)) {
         val w = size.width
         val stroke = Stroke(width = w * 0.09f, cap = StrokeCap.Round)
         // Capsule body.
-        drawRoundRect(Color.White, Offset(w * 0.33f, 0f), Size(w * 0.34f, w * 0.6f), CornerRadius(w * 0.17f))
+        drawRoundRect(color, Offset(w * 0.33f, 0f), Size(w * 0.34f, w * 0.6f), CornerRadius(w * 0.17f))
         // Cradle arc, stem, base.
-        drawArc(Color.White, 0f, 180f, false, Offset(w * 0.2f, w * 0.2f), Size(w * 0.6f, w * 0.55f), style = stroke)
-        drawLine(Color.White, Offset(w * 0.5f, w * 0.75f), Offset(w * 0.5f, w * 0.92f), stroke.width, StrokeCap.Round)
-        drawLine(Color.White, Offset(w * 0.32f, w * 0.95f), Offset(w * 0.68f, w * 0.95f), stroke.width, StrokeCap.Round)
+        drawArc(color, 0f, 180f, false, Offset(w * 0.2f, w * 0.2f), Size(w * 0.6f, w * 0.55f), style = stroke)
+        drawLine(color, Offset(w * 0.5f, w * 0.75f), Offset(w * 0.5f, w * 0.92f), stroke.width, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.32f, w * 0.95f), Offset(w * 0.68f, w * 0.95f), stroke.width, StrokeCap.Round)
     }
 }
 
 @Composable
-private fun BackspaceIcon() {
+private fun BackspaceIcon(color: Color) {
     Canvas(Modifier.size(24.dp)) {
         val w = size.width
         val h = size.height
@@ -196,8 +208,8 @@ private fun BackspaceIcon() {
             lineTo(w * 0.06f, h * 0.5f)
             close()
         }
-        drawPath(outline, Color.White, style = stroke)
-        drawLine(Color.White, Offset(w * 0.48f, h * 0.38f), Offset(w * 0.72f, h * 0.62f), stroke.width, StrokeCap.Round)
-        drawLine(Color.White, Offset(w * 0.72f, h * 0.38f), Offset(w * 0.48f, h * 0.62f), stroke.width, StrokeCap.Round)
+        drawPath(outline, color, style = stroke)
+        drawLine(color, Offset(w * 0.48f, h * 0.38f), Offset(w * 0.72f, h * 0.62f), stroke.width, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.72f, h * 0.38f), Offset(w * 0.48f, h * 0.62f), stroke.width, StrokeCap.Round)
     }
 }

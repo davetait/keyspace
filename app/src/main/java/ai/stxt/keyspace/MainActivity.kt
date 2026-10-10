@@ -16,8 +16,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -85,7 +83,7 @@ class MainActivity : ComponentActivity() {
         val settingsStore = SettingsStore(applicationContext)
 
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            KeyspaceTheme {
                 var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
                 var drawerState by remember { mutableStateOf(DrawerState.Closed) }
                 val grid by gridStore.slots.collectAsState()
@@ -114,8 +112,9 @@ class MainActivity : ComponentActivity() {
                 val usage by launchStats.usage.collectAsState()
                 val halfLife = settings.adaptSpeed.halfLifeDays
                 val results = remember(apps, typed, usage, halfLife) {
-                    if (typed.isBlank()) null else searchApps(apps, typed, usage, System.currentTimeMillis(), halfLife)
+                    if (typed.isBlank()) null else matchApps(apps, typed, usage, System.currentTimeMillis(), halfLife)
                 }
+                val litKeys = remember(apps, typed) { nextLetters(apps, typed) }
 
                 val speech = remember {
                     SpeechInput(
@@ -223,9 +222,10 @@ class MainActivity : ComponentActivity() {
                     ),
                 ) {
                     Column {
-                        TypedLine(text = typed, status = status)
+                        TypedLine(text = typed, status = status, noMatches = results?.isEmpty() == true)
                         Keyboard(
                             listening = listening,
+                            litKeys = litKeys,
                             onLetter = {
                                 status = null
                                 closeDrawerForInput()

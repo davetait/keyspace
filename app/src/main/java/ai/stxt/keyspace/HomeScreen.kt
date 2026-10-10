@@ -1,6 +1,18 @@
 package ai.stxt.keyspace
 
 import android.content.ClipData
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.drawBehind
+import android.graphics.drawable.AdaptiveIconDrawable
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import android.provider.Settings
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.platform.LocalContext
@@ -49,7 +61,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -117,14 +128,30 @@ fun HomeScreen(
     onDrawerStateChange: (DrawerState) -> Unit,
     onPlace: (area: SlotArea, index: Int, key: String) -> Unit,
     onRemove: (area: SlotArea, index: Int) -> Unit,
-    results: List<AppEntry>?,
+    results: List<AppMatch>?,
     onLaunchResult: (AppEntry) -> Unit,
     homeMenu: HomeMenuActions,
     widgets: WidgetsUi,
     inputArea: @Composable () -> Unit,
 ) {
     val onDragEnded = { if (drawerState.dragging) onDrawerStateChange(DrawerState.Closed) }
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            // One scrim behind the results rows, typed line, keyboard and dock, so they read on any wallpaper.
+            .drawBehind {
+                // Ramps up quickly so the typed line and keys are already well covered on light wallpapers.
+                drawRect(
+                    Brush.verticalGradient(
+                        0.40f to Color.Transparent,
+                        0.62f to Color.Black.copy(alpha = 0.45f),
+                        1f to Color.Black.copy(alpha = 0.6f),
+                    )
+                )
+            }
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
         // Home area: the shortcut grid, with the drawer opening over it.
         Box(Modifier.weight(1f).fillMaxWidth()) {
             HomeGrid(
@@ -183,7 +210,7 @@ private fun HomeGrid(
     onPlace: (index: Int, key: String) -> Unit,
     onRemove: (index: Int) -> Unit,
     onDragEnded: () -> Unit,
-    results: List<AppEntry>?,
+    results: List<AppMatch>?,
     onLaunchResult: (AppEntry) -> Unit,
     homeMenu: HomeMenuActions,
     widgets: WidgetsUi,
@@ -251,8 +278,8 @@ private fun HomeGrid(
         if (resultRows != null) {
             // Same row layout as the grid; only the bottom rows get results, right above the keyboard.
             GridRows(rows) { row ->
-                resultRows.getOrNull(row - (rows - resultRows.size))?.forEach { app ->
-                    ResultCell(app, repository, onLaunchResult, Modifier.weight(1f).fillMaxHeight())
+                resultRows.getOrNull(row - (rows - resultRows.size))?.forEach { match ->
+                    ResultCell(match, isTop = match != null && match == results.firstOrNull(), repository, onLaunchResult, Modifier.weight(1f).fillMaxHeight())
                 }
             }
         }
@@ -271,7 +298,7 @@ class HomeMenuActions(
 private fun HomeMenu(at: Offset?, actions: HomeMenuActions, onDismiss: () -> Unit) {
     // Anchor the dropdown at the press point.
     Box(Modifier.offset { at?.round() ?: IntOffset.Zero }) {
-        DropdownMenu(expanded = at != null, onDismissRequest = onDismiss) {
+        KeyspaceMenu(expanded = at != null, onDismissRequest = onDismiss) {
             listOf(
                 "Wallpaper" to actions.onWallpaper,
                 "Widgets" to actions.onWidgets,
@@ -300,10 +327,36 @@ private fun GridRows(rows: Int, modifier: Modifier = Modifier, row: @Composable 
 
 /** One search result: tap launches. Empty cells keep the row's spacing. */
 @Composable
-private fun ResultCell(app: AppEntry?, repository: AppRepository, onLaunch: (AppEntry) -> Unit, modifier: Modifier) {
+private fun ResultCell(
+    match: AppMatch?,
+    isTop: Boolean,
+    repository: AppRepository,
+    onLaunch: (AppEntry) -> Unit,
+    modifier: Modifier,
+) {
     Box(modifier, contentAlignment = Alignment.Center) {
-        if (app != null) {
-            AppIcon(app = app, repository = repository, modifier = Modifier.clickable { onLaunch(app) })
+        if (match != null) {
+            // The one ambient motion: a result that newly appears in this cell rises 6dp and fades in.
+            // Skipped when the system "Remove animations" setting is on.
+            val context = LocalContext.current
+            val reduceMotion = remember {
+                Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+            }
+            val appear = remember(match.app.key) { Animatable(if (reduceMotion) 1f else 0f) }
+            LaunchedEffect(match.app.key) { appear.animateTo(1f, tween(durationMillis = 160)) }
+            val rise = with(LocalDensity.current) { 6.dp.toPx() }
+            AppIcon(
+                app = match.app,
+                repository = repository,
+                highlight = match.matchedIndices,
+                ring = isTop,
+                modifier = Modifier
+                    .graphicsLayer {
+                        alpha = appear.value
+                        translationY = (1f - appear.value) * rise
+                    }
+                    .clickable { onLaunch(match.app) },
+            )
         }
     }
 }
@@ -354,8 +407,8 @@ private fun AppDrawer(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 8.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color.Black.copy(alpha = 0.75f))
+            .clip(KeyspaceTokens.PanelShape)
+            .background(KeyspaceColors.panel)
             .semantics { contentDescription = "App drawer" },
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -425,8 +478,8 @@ private fun DockBar(
                 app = app,
                 description = "Dock slot ${index + 1}",
                 showLabel = false,
-                // Dock slots always show, so it's clear where shortcuts go; the grid only shows them mid-drag.
-                showEmptyOutline = true,
+                // Like the grid: empty slots only show while something is being dragged.
+                showEmptyOutline = dragging,
                 emphasizeOutline = dragging,
                 repository = repository,
                 onPlace = onPlace,
@@ -507,7 +560,7 @@ private fun AppSlot(
             else -> Color.White.copy(alpha = 0.35f)
         }
         // Labeled icons are taller than wide, so they get a rounded box rather than a circle.
-        val highlightShape = if (showLabel) RoundedCornerShape(16.dp) else CircleShape
+        val highlightShape = if (showLabel) KeyspaceTokens.SmallShape else CircleShape
         if (app == null) {
             if (showEmptyOutline || highlighted) EmptyIcon(ring, showLabel)
         } else {
@@ -529,7 +582,7 @@ private fun AppSlot(
                             }
                         ),
                 )
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                KeyspaceMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
                         text = { Text("Remove") },
                         onClick = {
@@ -545,11 +598,13 @@ private fun AppSlot(
 
 @Composable
 private fun DrawerButton(onClick: () -> Unit) {
+    // Styled as a keycap so it reads as part of the keyboard, not as another app.
+    val dots = KeyspaceColors.keyLit
     Box(
         modifier = Modifier
             .size(IconSize)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.9f))
+            .clip(KeyspaceTokens.SmallShape)
+            .background(KeyspaceColors.key)
             .clickable(onClick = onClick)
             .semantics { contentDescription = "All apps" },
         contentAlignment = Alignment.Center,
@@ -559,7 +614,7 @@ private fun DrawerButton(onClick: () -> Unit) {
             val step = size.width / 3
             val radius = step * 0.22f
             for (row in 0..2) for (col in 0..2) {
-                drawCircle(Color(0xFF202124), radius, Offset(step * (col + 0.5f), step * (row + 0.5f)))
+                drawCircle(dots, radius, Offset(step * (col + 0.5f), step * (row + 0.5f)))
             }
         }
     }
@@ -571,23 +626,54 @@ private fun AppIcon(
     repository: AppRepository,
     modifier: Modifier = Modifier,
     showLabel: Boolean = true,
+    /**
+     * Label characters that matched a search. Shown bold at full strength with the rest of the label
+     * dimmed; not in the accent color, which can vanish against a wallpaper of the same hue.
+     */
+    highlight: List<Int> = emptyList(),
+    /** Accent ring marking the top search result. */
+    ring: Boolean = false,
 ) {
-    val icon = remember(app.key) { repository.loadIcon(app).toBitmap().asImageBitmap() }
-    IconLayout(label = app.label, showLabel = showLabel, modifier = modifier.semantics { contentDescription = app.label }) {
-        Image(bitmap = icon, contentDescription = null, modifier = Modifier.size(IconSize))
+    // Adaptive icons already come masked to the system shape. Legacy icons don't, so they get a round
+    // plate at 72% scale: every icon then has the same outline.
+    val (icon, legacy) = remember(app.key) {
+        val drawable = repository.loadIcon(app)
+        drawable.toBitmap().asImageBitmap() to (drawable !is AdaptiveIconDrawable)
+    }
+    val plate = KeyspaceColors.iconPlate
+    val accent = KeyspaceColors.accent
+    val label = remember(app.label, highlight) {
+        buildAnnotatedString {
+            append(app.label)
+            if (highlight.isNotEmpty()) {
+                addStyle(SpanStyle(color = Color.White.copy(alpha = 0.75f)), 0, app.label.length)
+                highlight.forEach { addStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Bold), it, it + 1) }
+            }
+        }
+    }
+    IconLayout(label = label, showLabel = showLabel, modifier = modifier.semantics { contentDescription = app.label }) {
+        Box(
+            modifier = Modifier
+                .size(IconSize)
+                .then(if (ring) Modifier.border(2.dp, accent, CircleShape).padding(3.dp) else Modifier)
+                .then(if (legacy) Modifier.clip(CircleShape).background(plate) else Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(bitmap = icon, contentDescription = null, modifier = Modifier.fillMaxSize(if (legacy) 0.72f else 1f))
+        }
     }
 }
 
 /** Empty-cell outline, laid out exactly like an [AppIcon] so it sits where the icon will appear. */
 @Composable
 private fun EmptyIcon(ring: Color, showLabel: Boolean) {
-    IconLayout(label = "", showLabel = showLabel) {
+    IconLayout(label = AnnotatedString(""), showLabel = showLabel) {
         Box(Modifier.size(IconSize).border(1.5.dp, ring, CircleShape))
     }
 }
 
 @Composable
-private fun IconLayout(label: String, showLabel: Boolean, modifier: Modifier = Modifier, icon: @Composable () -> Unit) {
+private fun IconLayout(label: AnnotatedString, showLabel: Boolean, modifier: Modifier = Modifier, icon: @Composable () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.padding(4.dp)) {
         icon()
         if (showLabel) {
@@ -644,11 +730,11 @@ private fun WidgetCell(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color.Black.copy(alpha = 0.4f))
+                    .clip(KeyspaceTokens.PanelShape)
+                    .background(KeyspaceColors.panel)
                     .combinedClickable(onClick = {}, onLongClick = { menuOpen = true }),
                 contentAlignment = Alignment.Center,
-            ) { Text("Widget unavailable", color = Color.White, style = MaterialTheme.typography.labelSmall) }
+            ) { Text("Widget unavailable", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelSmall) }
         } else {
             AndroidView(
                 factory = { ctx -> host.createView(ctx, widget.id, info) as KeyspaceWidgetHostView },
@@ -665,7 +751,7 @@ private fun WidgetCell(
                 modifier = Modifier.fillMaxSize(),
             )
         }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+        KeyspaceMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(
                 text = { Text("Remove") },
                 onClick = {

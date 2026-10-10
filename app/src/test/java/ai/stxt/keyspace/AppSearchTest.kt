@@ -52,6 +52,40 @@ class AppSearchTest {
     }
 
     @Test
+    fun `spaces are ignored, since the keyboard has no space key`() {
+        assertEquals(listOf("Play Store"), labels("playst"))
+        assertEquals(listOf("Play Store"), labels("play store"))
+    }
+
+    @Test
+    fun `matches only start at word starts`() {
+        assertEquals(emptyList<String>(), labels("ays"))
+    }
+
+    @Test
+    fun `matched indices point at the label characters that matched`() {
+        fun indices(query: String, label: String) =
+            matchApps(apps, query, emptyMap(), now).first { it.app.label == label }.matchedIndices
+        assertEquals(listOf(0, 1), indices("ma", "Maps"))
+        assertEquals(listOf(3, 4), indices("mu", "YT Music"))
+        assertEquals(listOf(0, 1, 2, 3, 5, 6), indices("playst", "Play Store"))
+    }
+
+    @Test
+    fun `next letters are the ones that continue a match`() {
+        // "g": Gmail -> m, Google Photos -> o.
+        assertEquals(setOf('m', 'o'), nextLetters(apps, "g"))
+        // "play" -> Play Store continues with s (across the space).
+        assertEquals(setOf('s'), nextLetters(apps, "play"))
+    }
+
+    @Test
+    fun `next letters are null when nothing is typed and empty when nothing matches`() {
+        assertEquals(null, nextLetters(apps, ""))
+        assertEquals(emptySet<Char>(), nextLetters(apps, "zz"))
+    }
+
+    @Test
     fun `blank query matches nothing`() {
         assertEquals(emptyList<String>(), labels(""))
         assertEquals(emptyList<String>(), labels("  "))

@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
@@ -43,10 +42,12 @@ fun SettingsDialog(
     onDismiss: () -> Unit,
 ) {
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
+        // contentColor is explicit: the panel is a translucent copy, which Material can't map to a text color.
+        Surface(shape = KeyspaceTokens.PanelShape, color = KeyspaceColors.panel, contentColor = MaterialTheme.colorScheme.onSurface) {
             Column(
                 modifier = Modifier.padding(24.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
+                // Spacing alone separates the groups; no divider lines.
+                verticalArrangement = Arrangement.spacedBy(28.dp),
             ) {
                 Text("Settings", style = MaterialTheme.typography.headlineSmall)
 
@@ -55,6 +56,7 @@ fun SettingsDialog(
                         val range = KeyspaceSettings.COLUMN_RANGE
                         OutlinedButton(
                             onClick = { onColumnsChange(settings.columns - 1) },
+                            shape = KeyspaceTokens.SmallShape,
                             enabled = settings.columns > range.first,
                             modifier = Modifier.semantics { contentDescription = "Fewer columns" },
                         ) { Text("−") }
@@ -65,13 +67,12 @@ fun SettingsDialog(
                         )
                         OutlinedButton(
                             onClick = { onColumnsChange(settings.columns + 1) },
+                            shape = KeyspaceTokens.SmallShape,
                             enabled = settings.columns < range.last,
                             modifier = Modifier.semantics { contentDescription = "More columns" },
                         ) { Text("+") }
                     }
                 }
-
-                HorizontalDivider()
 
                 Section("Search adapt speed", settings.adaptSpeed.description) {
                     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
@@ -79,13 +80,11 @@ fun SettingsDialog(
                             SegmentedButton(
                                 selected = speed == settings.adaptSpeed,
                                 onClick = { onAdaptSpeedChange(speed) },
-                                shape = SegmentedButtonDefaults.itemShape(index, AdaptSpeed.entries.size),
+                                shape = SegmentedButtonDefaults.itemShape(index, AdaptSpeed.entries.size, KeyspaceTokens.SmallShape),
                             ) { Text(speed.name) }
                         }
                     }
                 }
-
-                HorizontalDivider()
 
                 var confirmClear by remember { mutableStateOf(false) }
                 Section("Search history", "Forget which apps you open most, so search results go back to alphabetical") {
@@ -93,23 +92,21 @@ fun SettingsDialog(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Clear all history?", modifier = Modifier.weight(1f))
                             TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
-                            FilledTonalButton(onClick = {
+                            FilledTonalButton(shape = KeyspaceTokens.SmallShape, onClick = {
                                 onClearSearchHistory()
                                 confirmClear = false
                             }) { Text("Clear") }
                         }
                     } else {
-                        OutlinedButton(onClick = { confirmClear = true }) { Text("Clear search history") }
+                        OutlinedButton(onClick = { confirmClear = true }, shape = KeyspaceTokens.SmallShape) { Text("Clear search history") }
                     }
                 }
-
-                HorizontalDivider()
 
                 Section(
                     "Default home app",
                     if (isDefaultHome) "Keyspace is your home screen" else "Keyspace is not your home screen",
                 ) {
-                    OutlinedButton(onClick = onOpenHomeSettings) { Text("Change home app") }
+                    OutlinedButton(onClick = onOpenHomeSettings, shape = KeyspaceTokens.SmallShape) { Text("Change home app") }
                 }
 
                 Row(Modifier.fillMaxWidth()) {
