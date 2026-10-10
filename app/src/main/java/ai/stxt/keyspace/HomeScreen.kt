@@ -396,7 +396,7 @@ private fun Modifier.appDragSource(key: String, label: String, onTap: () -> Unit
         .semantics { onClick(label = "Open $label") { onTap(); true } }
         .dragAndDropSource { _ ->
             onDragStart()
-            DragAndDropTransferData(ClipData.newPlainText("app", key))
+            DragAndDropTransferData(ClipData.newPlainText("app", key), localState = KeyspaceDrag)
         }
 
 @Composable
@@ -489,8 +489,12 @@ private fun AppSlot(
         modifier = modifier
             .dragAndDropTarget(
                 shouldStartDragAndDrop = { event ->
-                    val isWidget = event.toAndroidDragEvent().clipDescription?.label == WIDGET_CLIP_LABEL
-                    event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN) && (!isWidget || onWidgetDrop != null)
+                    val dragEvent = event.toAndroidDragEvent()
+                    val isWidget = dragEvent.clipDescription?.label == WIDGET_CLIP_LABEL
+                    // Only Keyspace's own drags: other apps can't supply this marker (see KeyspaceDrag).
+                    dragEvent.localState === KeyspaceDrag &&
+                        event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN) &&
+                        (!isWidget || onWidgetDrop != null)
                 },
                 target = target,
             )

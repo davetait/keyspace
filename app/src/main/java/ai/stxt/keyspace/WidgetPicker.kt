@@ -43,6 +43,13 @@ import kotlinx.coroutines.withContext
 /** ClipData label marking a drag that carries a widget provider (vs. an app). */
 const val WIDGET_CLIP_LABEL = "widget"
 
+/**
+ * Attached as local state to every drag Keyspace starts. Android only returns local state to the app that
+ * started the drag, so drop targets use it to ignore drags from other apps (split-screen, freeform), whose
+ * contents can't be trusted.
+ */
+object KeyspaceDrag
+
 /** An installed widget the user can add. Sizes are in dp. */
 class WidgetChoice(
     val provider: ComponentName,
@@ -129,7 +136,8 @@ private fun WidgetRow(choice: WidgetChoice, grid: GridMetrics?, onDragStart: () 
                     .dragAndDropSource { _ ->
                         onDragStart()
                         DragAndDropTransferData(
-                            ClipData(WIDGET_CLIP_LABEL, arrayOf(ClipDescription.MIMETYPE_TEXT_PLAIN), ClipData.Item(choice.provider.flattenToString()))
+                            ClipData(WIDGET_CLIP_LABEL, arrayOf(ClipDescription.MIMETYPE_TEXT_PLAIN), ClipData.Item(choice.provider.flattenToString())),
+                            localState = KeyspaceDrag,
                         )
                     },
             )

@@ -200,15 +200,16 @@ class MainActivity : ComponentActivity() {
                         metrics = gridMetrics,
                         onMetrics = { gridMetrics = it },
                         onDrop = { row, col, provider, metrics ->
+                            // Only widgets from the installed list; anything else is refused rather than trusted.
                             val choice = widgetChoices.firstOrNull { it.provider.flattenToString() == provider }
-                            val (spanX, spanY) = choice?.let {
-                                spanFor(it.minWidthDp, it.minHeightDp, it.targetCellsX, it.targetCellsY, metrics)
-                            } ?: (1 to 1)
+                                ?: return@WidgetsUi false
+                            val (spanX, spanY) =
+                                spanFor(choice.minWidthDp, choice.minHeightDp, choice.targetCellsX, choice.targetCellsY, metrics)
                             val appCells = grid.resolve(apps, metrics.rows * metrics.columns)
                                 .mapIndexedNotNull { index, app -> index.takeIf { app != null } }
                                 .toSet()
                             if (canPlace(row, col, spanX, spanY, metrics.columns, metrics.rows, placedWidgets, appCells)) {
-                                addWidget(ComponentName.unflattenFromString(provider)!!, PlacedWidget(-1, row, col, spanX, spanY))
+                                addWidget(choice.provider, PlacedWidget(-1, row, col, spanX, spanY))
                                 true
                             } else {
                                 status = "Not enough room there"
