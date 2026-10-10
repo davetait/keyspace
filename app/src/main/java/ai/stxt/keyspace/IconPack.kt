@@ -68,6 +68,8 @@ fun parseComponent(raw: String?): String? {
     return "$pkg/${if (cls.startsWith(".")) pkg + cls else cls}"
 }
 
+const val MAX_APPFILTER_ELEMENTS = 100_000
+
 /** Reads appfilter.xml. Unknown tags and malformed entries are skipped, never fatal. */
 fun parseAppFilter(parser: XmlPullParser): AppFilter {
     val items = mutableMapOf<String, String>()
@@ -80,8 +82,12 @@ fun parseAppFilter(parser: XmlPullParser): AppFilter {
     /** img1, img2, … in order. */
     fun images(): List<String> = (1..10).mapNotNull { attr("img$it") }
 
+    var entries = 0
     while (parser.next() != XmlPullParser.END_DOCUMENT) {
         if (parser.eventType != XmlPullParser.START_TAG) continue
+        // Counts every element, unknown ones included. Real packs have ~15,000; stop at a generous cap
+        // so a huge file can't stall the launcher.
+        if (++entries > MAX_APPFILTER_ELEMENTS) break
         when (parser.name) {
             "item" -> {
                 val component = parseComponent(attr("component")) ?: continue
@@ -145,12 +151,15 @@ class IconPackLoader private constructor(
         return BitmapDrawable(res, out)
     }
 
+    /** A pack drawable by name; null if missing or unloadable (malformed XML, bad image, …). */
     @SuppressLint("DiscouragedApi") // Icon packs are addressed by resource name; there is no other way.
     private fun drawable(name: String): Drawable? = try {
         val id = res.getIdentifier(name, "drawable", packageName).takeIf { it != 0 }
             ?: res.getIdentifier(name, "mipmap", packageName).takeIf { it != 0 }
         id?.let { res.getDrawable(it, null) }
-    } catch (e: Resources.NotFoundException) {
+    } catch (e: Exception) {
+        // Inflation errors aren't always NotFoundException; any failure means "no icon".
+        Log.w(TAG, "Icon pack $packageName: can't load drawable $name", e)
         null
     }
 

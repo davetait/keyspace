@@ -2,14 +2,20 @@ package ai.stxt.keyspace
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
+import android.util.Log
 import android.util.LruCache
+import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** An app icon, and whether it needs a plate to match the round icon shape. */
-class LoadedIcon(val drawable: Drawable, val needsPlate: Boolean)
+/**
+ * An app icon rendered at a fixed size. [needsPlate]: a legacy icon that gets a round plate.
+ * [fromPack]: drawn by an icon pack, so its outline can be any shape (not the system circle).
+ */
+class LoadedIcon(val bitmap: Bitmap, val needsPlate: Boolean, val fromPack: Boolean = false)
 
 class AppRepository(private val context: Context) {
 
@@ -42,9 +48,27 @@ class AppRepository(private val context: Context) {
     fun loadIcon(app: AppEntry): LoadedIcon {
         icons.get(app.key)?.let { return it }
         val original = pm.getActivityIcon(app.component)
-        val packIcon = iconPack?.iconFor(app, original)
+        // Icon packs are third-party apps, so anything they supply is untrusted: a drawable with no size,
+        // a malformed resource or an enormous image must not take down the home screen. Any failure falls
+        // back to the app's own icon.
+        val packIcon = iconPack?.let { pack ->
+            try {
+                pack.iconFor(app, original)?.toBitmap(ICON_PX, ICON_PX)
+            } catch (e: Exception) {
+                Log.w(TAG, "Icon pack ${pack.packageName} failed for ${app.key}", e)
+                null
+            } catch (e: OutOfMemoryError) {
+                Log.w(TAG, "Icon pack ${pack.packageName} image too large for ${app.key}", e)
+                null
+            }
+        }
+        // Always drawn at a fixed size, never at the drawable's own reported size (which can be -1 or huge).
         // Pack icons are drawn to their own shape; only original legacy icons need the round plate.
-        val loaded = if (packIcon != null) LoadedIcon(packIcon, needsPlate = false) else LoadedIcon(original, original !is AdaptiveIconDrawable)
+        val loaded = if (packIcon != null) {
+            LoadedIcon(packIcon, needsPlate = false, fromPack = true)
+        } else {
+            LoadedIcon(original.toBitmap(ICON_PX, ICON_PX), needsPlate = original !is AdaptiveIconDrawable)
+        }
         icons.put(app.key, loaded)
         return loaded
     }
@@ -59,5 +83,7 @@ class AppRepository(private val context: Context) {
 
     private companion object {
         const val ICON_CACHE_SIZE = 200
+        const val ICON_PX = 192
+        const val TAG = "AppRepository"
     }
 }

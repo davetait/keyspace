@@ -80,4 +80,14 @@ class IconPackTest {
         assertNull(parseComponent("ComponentInfo{a.b}"))
         assertNull(parseComponent(null))
     }
+
+    @Test
+    fun `stops reading after the entry cap`() {
+        val many = (1..MAX_APPFILTER_ELEMENTS + 50).joinToString("") {
+            "<item component=\"ComponentInfo{p$it/p$it.A}\" drawable=\"d\"/>"
+        }
+        val filter = parse("<resources>$many</resources>")
+        // The root <resources> element counts toward the cap too.
+        assertEquals(MAX_APPFILTER_ELEMENTS - 1, filter.items.size)
+    }
 }

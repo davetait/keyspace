@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hostile-pack check: an enormous reported size must not create an enormous bitmap. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20000dp" android:height="20000dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFAB00" android:pathData="M54,6 L102,54 L54,102 L6,54 Z" />
+</vector>

@@ -1,6 +1,10 @@
 package ai.stxt.keyspace
 
 import android.content.ClipData
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.drawBehind
@@ -634,15 +638,14 @@ private fun AppIcon(
      * dimmed; not in the accent color, which can vanish against a wallpaper of the same hue.
      */
     highlight: List<Int> = emptyList(),
-    /** Accent ring marking the top search result. */
+    /** Accent ring marking the top search result; follows the icon's outline. */
     ring: Boolean = false,
 ) {
     // Adaptive icons already come masked to the system shape, and icon pack icons have their own. Legacy
     // icons have neither, so they get a round plate at 72% scale: every icon then has a consistent outline.
-    val (icon, legacy) = remember(app.key, LocalIconPack.current) {
-        val loaded = repository.loadIcon(app)
-        loaded.drawable.toBitmap().asImageBitmap() to loaded.needsPlate
-    }
+    val loaded = remember(app.key, LocalIconPack.current) { repository.loadIcon(app) }
+    val icon = remember(loaded) { loaded.bitmap.asImageBitmap() }
+    val legacy = loaded.needsPlate
     val plate = KeyspaceColors.iconPlate
     val accent = KeyspaceColors.accent
     val label = remember(app.label, highlight) {
@@ -658,12 +661,32 @@ private fun AppIcon(
         Box(
             modifier = Modifier
                 .size(IconSize)
-                .then(if (ring) Modifier.border(2.dp, accent, CircleShape).padding(3.dp) else Modifier)
+                .then(if (ring) Modifier.outlineRing(accent, rounded = loaded.fromPack) else Modifier)
                 .then(if (legacy) Modifier.clip(CircleShape).background(plate) else Modifier),
             contentAlignment = Alignment.Center,
         ) {
             Image(bitmap = icon, contentDescription = null, modifier = Modifier.fillMaxSize(if (legacy) 0.72f else 1f))
         }
+    }
+}
+
+/**
+ * A 2dp ring drawn just outside the icon, so a ringed icon stays the same size as its neighbors.
+ * System and plated icons are round on this launcher; icon pack icons can be any shape, so they get a
+ * rounded square that encloses whatever the pack drew.
+ */
+private fun Modifier.outlineRing(color: Color, rounded: Boolean): Modifier = drawWithContent {
+    drawContent()
+    val stroke = 2.dp.toPx()
+    val gap = 3.dp.toPx()
+    val inset = -(gap + stroke / 2)
+    val topLeft = Offset(inset, inset)
+    val ringSize = Size(size.width - 2 * inset, size.height - 2 * inset)
+    if (rounded) {
+        val radius = KeyspaceTokens.SmallRadius.toPx() + gap
+        drawRoundRect(color, topLeft, ringSize, CornerRadius(radius), style = Stroke(stroke))
+    } else {
+        drawOval(color, topLeft, ringSize, style = Stroke(stroke))
     }
 }
 
