@@ -21,4 +21,25 @@ class AppListTest {
 
         assertEquals(listOf("Alpha", "beta", "zebra"), result.map { it.label })
     }
+
+    @Test
+    fun `own-profile keys are unchanged, other profiles are tagged`() {
+        assertEquals("a.app/a.app.Main", app("A", "a.app").key)
+        assertEquals("a.app/a.app.Main#10", app("A", "a.app").copy(profileSerial = 10).key)
+    }
+
+    @Test
+    fun `work copy of this launcher and of other apps is kept`() {
+        val work = app("Keyspace", "ai.stxt.keyspace").copy(profileSerial = 10)
+        val result = listOf(app("Keyspace", "ai.stxt.keyspace"), work).forHomeScreen("ai.stxt.keyspace")
+        assertEquals(listOf(work), result)
+    }
+
+    @Test
+    fun `custom labels rename and re-sort, keeping the original`() {
+        val renamed = listOf(app("Chrome", "c.app"), app("Maps", "m.app"))
+            .withCustomLabels(mapOf("c.app/c.app.Main" to "Web", "m.app/m.app.Main" to " "))
+        assertEquals(listOf("Maps", "Web"), renamed.map { it.label })
+        assertEquals("Chrome", renamed.last().originalLabel)
+    }
 }

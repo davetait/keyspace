@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- "Uninstall" in the app menu: lets Android show its uninstall confirmation. -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+
     <!-- Microphone key: speech to text. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
@@ -64,5 +67,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Notification dots: only runs if the user grants notification access in Settings. -->
+        <service
+            android:name=".KeyspaceNotificationListener"
+            android:exported="true"
+            android:label="@string/notification_dots"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

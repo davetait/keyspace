@@ -1,12 +1,28 @@
 package ai.stxt.keyspace
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.LauncherApps
+import android.content.pm.ShortcutInfo
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
+import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.Process
+import android.os.UserHandle
+import android.os.UserManager
 import android.util.Log
 import android.util.LruCache
+import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,24 +33,68 @@ import kotlinx.coroutines.withContext
  */
 class LoadedIcon(val bitmap: Bitmap, val needsPlate: Boolean, val fromPack: Boolean = false)
 
+/**
+ * Apps across all of the user's profiles (personal, work, …), via [LauncherApps], the API Android
+ * provides for home screens. Also launches apps and their shortcuts and opens App info / Uninstall.
+ */
+enum class UninstallKind { None, App, Updates }
+
 class AppRepository(private val context: Context) {
 
     private val pm = context.packageManager
+    private val launcherApps = context.getSystemService(LauncherApps::class.java)
+    private val userManager = context.getSystemService(UserManager::class.java)
+    private val ownProfile = Process.myUserHandle()
 
     suspend fun loadApps(): List<AppEntry> = withContext(Dispatchers.IO) {
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        pm.queryIntentActivities(intent, 0)
-            .map { info ->
+        launcherApps.profiles.flatMap { profile ->
+            val serial = if (profile == ownProfile) null else userManager.getSerialNumberForUser(profile)
+            launcherApps.getActivityList(null, profile).map { info ->
                 AppEntry(
-                    label = info.loadLabel(pm).toString(),
-                    packageName = info.activityInfo.packageName,
-                    className = info.activityInfo.name,
+                    label = info.label.toString(),
+                    packageName = info.componentName.packageName,
+                    className = info.componentName.className,
+                    profileSerial = serial,
                 )
             }
-            .forHomeScreen(selfPackage = context.packageName)
+        }.forHomeScreen(selfPackage = context.packageName)
+    }
+
+    fun userOf(app: AppEntry): UserHandle =
+        app.profileSerial?.let { userManager.getUserForSerialNumber(it) } ?: ownProfile
+
+    /**
+     * Calls [onChange] (on the main thread) when apps are installed, removed or updated in any profile,
+     * or a profile is turned on or off. Returns a function that stops listening.
+     */
+    fun observeChanges(onChange: () -> Unit): () -> Unit {
+        val callback = object : LauncherApps.Callback() {
+            override fun onPackageAdded(packageName: String, user: UserHandle) = changed()
+            override fun onPackageRemoved(packageName: String, user: UserHandle) = changed()
+            override fun onPackageChanged(packageName: String, user: UserHandle) = changed()
+            override fun onPackagesAvailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = changed()
+            override fun onPackagesUnavailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = changed()
+
+            private fun changed() {
+                // An update can change an icon, so drop cached icons too.
+                icons.evictAll()
+                onChange()
+            }
+        }
+        launcherApps.registerCallback(callback, Handler(Looper.getMainLooper()))
+        return { launcherApps.unregisterCallback(callback) }
     }
 
     private var iconPack: IconPackLoader? = null
+    /** Background and glyph colors for themed icons; null when themed icons are off. */
+    private var themeColors: Pair<Int, Int>? = null
+
+    /** Turns themed icons on (with these wallpaper-derived colors) or off (null). */
+    fun setThemedIcons(colors: Pair<Int, Int>?) {
+        if (colors == themeColors) return
+        themeColors = colors
+        icons.evictAll()
+    }
     private val icons = LruCache<String, LoadedIcon>(ICON_CACHE_SIZE)
 
     /** Switches icon pack (null: system icons). Returns false if the pack couldn't be loaded. */
@@ -53,7 +113,7 @@ class AppRepository(private val context: Context) {
         // back to the app's own icon.
         val packIcon = iconPack?.let { pack ->
             try {
-                pack.iconFor(app, original)?.toBitmap(ICON_PX, ICON_PX)
+                pack.iconFor(app, original)
             } catch (e: Exception) {
                 Log.w(TAG, "Icon pack ${pack.packageName} failed for ${app.key}", e)
                 null
@@ -64,26 +124,137 @@ class AppRepository(private val context: Context) {
         }
         // Always drawn at a fixed size, never at the drawable's own reported size (which can be -1 or huge).
         // Pack icons are drawn to their own shape; only original legacy icons need the round plate.
+        // Precedence: icon pack (mapped or styled) > themed icon > the app's own icon.
         val loaded = if (packIcon != null) {
-            LoadedIcon(packIcon, needsPlate = false, fromPack = true)
+            render(packIcon, app)?.let { LoadedIcon(it, needsPlate = false, fromPack = true) }
         } else {
-            LoadedIcon(original.toBitmap(ICON_PX, ICON_PX), needsPlate = original !is AdaptiveIconDrawable)
-        }
+            themed(original)?.let { render(it, app) }?.let { LoadedIcon(it, needsPlate = false) }
+        } ?: LoadedIcon(
+            // A blank icon is better than a crash if even the app's own icon can't be drawn.
+            render(original, app) ?: createBitmap(ICON_PX, ICON_PX),
+            needsPlate = original !is AdaptiveIconDrawable,
+        )
         icons.put(app.key, loaded)
         return loaded
     }
 
+    /**
+     * The app's monochrome icon (Android 13+) drawn in the theme colors on a round plate; null when themed
+     * icons are off or the app has no monochrome icon (it then keeps its own icon, as on Pixel).
+     */
+    private fun themed(original: Drawable): Drawable? {
+        val (background, glyph) = themeColors ?: return null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || original !is AdaptiveIconDrawable) return null
+        val mono = original.monochrome ?: return null
+        val size = ICON_PX
+        val out = createBitmap(size, size)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = background }
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        // Adaptive icon layers are drawn 50% larger than the icon, centered, with the edges masked off.
+        val extra = size / 4
+        mono.mutate().setTint(glyph)
+        mono.setBounds(-extra, -extra, size + extra, size + extra)
+        canvas.save()
+        canvas.clipPath(Path().apply { addCircle(size / 2f, size / 2f, size / 2f, Path.Direction.CW) })
+        mono.draw(canvas)
+        canvas.restore()
+        return BitmapDrawable(context.resources, out)
+    }
+
+    /** Renders at the fixed icon size, adding the work badge for other profiles. Null if the drawable fails. */
+    private fun render(drawable: Drawable, app: AppEntry): Bitmap? = try {
+        val badged = if (app.isOtherProfile) pm.getUserBadgedIcon(drawable, userOf(app)) else drawable
+        badged.toBitmap(ICON_PX, ICON_PX)
+    } catch (e: Exception) {
+        Log.w(TAG, "Couldn't render icon for ${app.key}", e)
+        null
+    } catch (e: OutOfMemoryError) {
+        Log.w(TAG, "Icon too large for ${app.key}", e)
+        null
+    }
+
     fun launch(app: AppEntry) {
-        val intent = Intent(Intent.ACTION_MAIN)
-            .addCategory(Intent.CATEGORY_LAUNCHER)
-            .setComponent(app.component)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-        context.startActivity(intent)
+        val user = userOf(app)
+        // A paused work profile: ask Android to turn it back on (allowed for the default home app).
+        if (app.isOtherProfile && userManager.isQuietModeEnabled(user)) {
+            runCatching { userManager.requestQuietModeEnabled(false, user) }
+                .onFailure { Log.w(TAG, "Couldn't resume profile for ${app.key}", it) }
+            return
+        }
+        try {
+            launcherApps.startMainActivity(app.component, user, null, null)
+        } catch (e: Exception) {
+            // ActivityNotFoundException or SecurityException: the app went away or was disabled.
+            Log.w(TAG, "Couldn't launch ${app.key}", e)
+        }
+    }
+
+    /** The app's own shortcuts (e.g. "New incognito tab"); empty unless Keyspace is the default home app. */
+    fun shortcuts(app: AppEntry): List<ShortcutInfo> {
+        if (!runCatching { launcherApps.hasShortcutHostPermission() }.getOrDefault(false)) return emptyList()
+        val query = LauncherApps.ShortcutQuery()
+            .setPackage(app.packageName)
+            .setActivity(app.component)
+            .setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST)
+        return runCatching { launcherApps.getShortcuts(query, userOf(app)).orEmpty() }
+            .getOrDefault(emptyList())
+            .filter { it.isEnabled }
+            // Manifest (static) shortcuts first, as the app ordered them, then dynamic ones.
+            .sortedWith(compareBy({ if (it.isDeclaredInManifest) 0 else 1 }, { it.rank }))
+            .take(MAX_SHORTCUTS)
+    }
+
+    fun shortcutIcon(shortcut: ShortcutInfo): Bitmap? = try {
+        launcherApps.getShortcutIconDrawable(shortcut, context.resources.displayMetrics.densityDpi)?.toBitmap(ICON_PX, ICON_PX)
+    } catch (e: Exception) {
+        null
+    }
+
+    fun launchShortcut(shortcut: ShortcutInfo) {
+        try {
+            launcherApps.startShortcut(shortcut, null, null)
+        } catch (e: Exception) {
+            // The shortcut was removed or disabled since the menu opened.
+            Log.w(TAG, "Couldn't start shortcut ${shortcut.id}", e)
+        }
+    }
+
+    fun openAppInfo(app: AppEntry) {
+        runCatching { launcherApps.startAppDetailsActivity(app.component, userOf(app), null, null) }
+            .onFailure { Log.w(TAG, "Couldn't open app info for ${app.key}", it) }
+    }
+
+    /**
+     * What "Uninstall" would do: remove the app, remove only its updates (a built-in app that was updated),
+     * or nothing (a built-in app that was never updated).
+     */
+    fun uninstallKind(app: AppEntry): UninstallKind {
+        val info = runCatching { launcherApps.getApplicationInfo(app.packageName, 0, userOf(app)) }.getOrNull()
+            ?: return UninstallKind.None
+        return when {
+            info.flags and ApplicationInfo.FLAG_SYSTEM == 0 -> UninstallKind.App
+            info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0 -> UninstallKind.Updates
+            else -> UninstallKind.None
+        }
+    }
+
+    fun uninstall(app: AppEntry) {
+        // Android shows its own confirmation; nothing is removed without the user agreeing there.
+        val intent = Intent(Intent.ACTION_DELETE, Uri.fromParts("package", app.packageName, null))
+            .putExtra(Intent.EXTRA_USER, userOf(app))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            context.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "No uninstaller for ${app.key}", e)
+        }
     }
 
     private companion object {
         const val ICON_CACHE_SIZE = 200
         const val ICON_PX = 192
+        const val MAX_SHORTCUTS = 4
         const val TAG = "AppRepository"
     }
 }

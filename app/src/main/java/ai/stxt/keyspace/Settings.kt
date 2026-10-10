@@ -18,16 +18,28 @@ data class KeyspaceSettings(
     val adaptSpeed: AdaptSpeed = AdaptSpeed.Normal,
     /** Package of the chosen icon pack; null for the system icons. */
     val iconPack: String? = null,
+    /** Dots on apps with notifications (also needs notification access). */
+    val notificationDots: Boolean = false,
+    /** Android 13+ monochrome icons, tinted to the wallpaper colors. */
+    val themedIcons: Boolean = false,
 ) {
     companion object {
         const val DEFAULT_COLUMNS = 5
         val COLUMN_RANGE = 4..7
 
         /** Tolerates missing or out-of-range stored values by falling back to defaults. */
-        fun parse(columns: Int?, adaptSpeed: String?, iconPack: String? = null) = KeyspaceSettings(
+        fun parse(
+            columns: Int?,
+            adaptSpeed: String?,
+            iconPack: String? = null,
+            notificationDots: Boolean = false,
+            themedIcons: Boolean = false,
+        ) = KeyspaceSettings(
             columns = columns?.coerceIn(COLUMN_RANGE) ?: DEFAULT_COLUMNS,
             adaptSpeed = AdaptSpeed.entries.firstOrNull { it.name == adaptSpeed } ?: AdaptSpeed.Normal,
             iconPack = iconPack?.takeIf { it.isNotBlank() },
+            notificationDots = notificationDots,
+            themedIcons = themedIcons,
         )
     }
 }
@@ -40,9 +52,20 @@ class SettingsStore(context: Context) {
             columns = if (prefs.contains(COLUMNS)) prefs.getInt(COLUMNS, 0) else null,
             adaptSpeed = prefs.getString(ADAPT_SPEED, null),
             iconPack = prefs.getString(ICON_PACK, null),
+            notificationDots = prefs.getBoolean(NOTIFICATION_DOTS, false),
+            themedIcons = prefs.getBoolean(THEMED_ICONS, false),
         )
     )
     val settings: StateFlow<KeyspaceSettings> = _settings.asStateFlow()
+
+    private val _welcomeDismissed = MutableStateFlow(prefs.getBoolean(WELCOME_DISMISSED, false))
+    /** The user chose "Not now" on the set-as-home card; don't show it again. */
+    val welcomeDismissed: StateFlow<Boolean> = _welcomeDismissed.asStateFlow()
+
+    fun dismissWelcome() {
+        _welcomeDismissed.value = true
+        prefs.edit { putBoolean(WELCOME_DISMISSED, true) }
+    }
 
     fun setColumns(columns: Int) = update(_settings.value.copy(columns = columns.coerceIn(KeyspaceSettings.COLUMN_RANGE)))
 
@@ -50,12 +73,18 @@ class SettingsStore(context: Context) {
 
     fun setIconPack(packageName: String?) = update(_settings.value.copy(iconPack = packageName))
 
+    fun setNotificationDots(on: Boolean) = update(_settings.value.copy(notificationDots = on))
+
+    fun setThemedIcons(on: Boolean) = update(_settings.value.copy(themedIcons = on))
+
     private fun update(settings: KeyspaceSettings) {
         _settings.value = settings
         prefs.edit {
             putInt(COLUMNS, settings.columns)
             putString(ADAPT_SPEED, settings.adaptSpeed.name)
             if (settings.iconPack == null) remove(ICON_PACK) else putString(ICON_PACK, settings.iconPack)
+            putBoolean(NOTIFICATION_DOTS, settings.notificationDots)
+            putBoolean(THEMED_ICONS, settings.themedIcons)
         }
     }
 
@@ -63,5 +92,8 @@ class SettingsStore(context: Context) {
         const val COLUMNS = "columns"
         const val ADAPT_SPEED = "adapt_speed"
         const val ICON_PACK = "icon_pack"
+        const val WELCOME_DISMISSED = "welcome_dismissed"
+        const val NOTIFICATION_DOTS = "notification_dots"
+        const val THEMED_ICONS = "themed_icons"
     }
 }

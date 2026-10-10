@@ -1,6 +1,9 @@
 package ai.stxt.keyspace
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material3.Switch
+import androidx.compose.foundation.selection.toggleable
+import android.os.Build
 import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalContext
@@ -51,6 +54,10 @@ fun SettingsDialog(
     iconPacks: List<IconPackInfo>,
     onIconPackChange: (String?) -> Unit,
     onFindIconPacks: () -> Unit,
+    hasNotificationAccess: Boolean,
+    onNotificationDotsChange: (Boolean) -> Unit,
+    onGrantNotificationAccess: () -> Unit,
+    onThemedIconsChange: (Boolean) -> Unit,
     onOpenHomeSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -125,6 +132,32 @@ fun SettingsDialog(
                     }
                 }
 
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    SwitchSection(
+                        title = "Themed icons",
+                        description = "Apps that support it use a single-color icon matched to your wallpaper",
+                        checked = settings.themedIcons,
+                        onCheckedChange = onThemedIconsChange,
+                    )
+                }
+
+                SwitchSection(
+                    title = "Notification dots",
+                    description = when {
+                        !settings.notificationDots -> "Show a dot on apps with notifications"
+                        hasNotificationAccess -> "Showing a dot on apps with notifications"
+                        else -> "Needs notification access. Keyspace only checks which apps have notifications, never what they say."
+                    },
+                    checked = settings.notificationDots,
+                    onCheckedChange = onNotificationDotsChange,
+                ) {
+                    if (settings.notificationDots && !hasNotificationAccess) {
+                        OutlinedButton(onClick = onGrantNotificationAccess, shape = KeyspaceTokens.SmallShape) {
+                            Text("Allow notification access")
+                        }
+                    }
+                }
+
                 var confirmClear by remember { mutableStateOf(false) }
                 Section("Search history", "Forget which apps you open most, so search results go back to alphabetical") {
                     if (confirmClear) {
@@ -182,5 +215,30 @@ private fun IconPackRow(label: String, icon: ImageBitmap?, selected: Boolean, on
             Image(icon, contentDescription = null, modifier = Modifier.padding(start = 8.dp).size(28.dp))
         }
         Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 12.dp))
+    }
+}
+
+@Composable
+private fun SwitchSection(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    extra: @Composable () -> Unit = {},
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = checked, onCheckedChange = null, modifier = Modifier.padding(start = 16.dp))
+        }
+        extra()
     }
 }

@@ -55,4 +55,47 @@ class WidgetLayoutTest {
         assertEquals(listOf(2), visibleWidgets(widgets, columns = 4, rows = 5).map { it.id })
         assertEquals(listOf(1, 2), visibleWidgets(widgets, columns = 5, rows = 5).map { it.id })
     }
+
+    private val w = PlacedWidget(1, row = 1, col = 1, spanX = 2, spanY = 2)
+    private val free = WidgetSizeLimits(minX = 1, minY = 1, maxX = 5, maxY = 5, horizontal = true, vertical = true)
+
+    @Test
+    fun `move into free space, not into a neighbor, an app, or off the grid`() {
+        val neighbor = PlacedWidget(2, row = 0, col = 3, spanX = 2, spanY = 1)
+        assertEquals(w.copy(row = 3, col = 0), moveWidget(w, 3, 0, 5, 5, listOf(w, neighbor), emptySet()))
+        assertEquals(null, moveWidget(w, 0, 2, 5, 5, listOf(w, neighbor), emptySet()))
+        assertEquals(null, moveWidget(w, 3, 0, 5, 5, listOf(w), appCells = setOf(20)))
+        assertEquals(null, moveWidget(w, 4, 0, 5, 5, listOf(w), emptySet()))
+    }
+
+    @Test
+    fun `moving onto its own old cells is allowed`() {
+        assertEquals(w.copy(col = 2), moveWidget(w, 1, 2, 5, 5, listOf(w), emptySet()))
+    }
+
+    @Test
+    fun `resize grows and shrinks from any edge within limits`() {
+        assertEquals(w.copy(spanX = 3), resizeWidget(w, WidgetEdge.Right, 1, free, 5, 5, listOf(w), emptySet()))
+        assertEquals(w.copy(col = 0, spanX = 3), resizeWidget(w, WidgetEdge.Left, -1, free, 5, 5, listOf(w), emptySet()))
+        assertEquals(w.copy(row = 2, spanY = 1), resizeWidget(w, WidgetEdge.Top, 1, free, 5, 5, listOf(w), emptySet()))
+        assertEquals(null, resizeWidget(w, WidgetEdge.Bottom, -2, free, 5, 5, listOf(w), emptySet()))
+    }
+
+    @Test
+    fun `resize respects min, max, direction, neighbors and the grid edge`() {
+        val capped = free.copy(maxX = 2, minY = 2)
+        assertEquals(null, resizeWidget(w, WidgetEdge.Right, 1, capped, 5, 5, listOf(w), emptySet()))
+        assertEquals(null, resizeWidget(w, WidgetEdge.Top, 1, capped, 5, 5, listOf(w), emptySet()))
+        assertEquals(null, resizeWidget(w, WidgetEdge.Right, 1, free.copy(horizontal = false), 5, 5, listOf(w), emptySet()))
+        val neighbor = PlacedWidget(2, row = 1, col = 3, spanX = 1, spanY = 1)
+        assertEquals(null, resizeWidget(w, WidgetEdge.Right, 1, free, 5, 5, listOf(w, neighbor), emptySet()))
+        assertEquals(null, resizeWidget(w, WidgetEdge.Right, 3, free, 5, 5, listOf(w), emptySet()))
+    }
+
+    @Test
+    fun `size limits come from provider sizes in cells`() {
+        val grid = GridMetrics(columns = 5, rows = 5, cellWidthDp = 80f, cellHeightDp = 100f)
+        val limits = sizeLimits(w, 110f, 40f, 0f, 0f, 250f, 0f, horizontal = true, vertical = false, grid = grid)
+        assertEquals(WidgetSizeLimits(minX = 2, minY = 1, maxX = 4, maxY = 5, horizontal = true, vertical = false), limits)
+    }
 }

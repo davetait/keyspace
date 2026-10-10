@@ -1,6 +1,11 @@
 package ai.stxt.keyspace
 
 import android.content.ClipData
+import kotlin.math.roundToInt
+import androidx.compose.foundation.gestures.detectDragGestures
+import android.os.Build
+import android.appwidget.AppWidgetProviderInfo
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
@@ -276,6 +281,24 @@ private fun HomeGrid(
                     // Hidden (and untouchable) behind search results.
                     visible = !searching,
                     onRemove = { widgets.onRemove(widget.id) },
+                    onEdit = { widgets.onEdit(widget.id) },
+                )
+            }
+        }
+        shownWidgets.firstOrNull { it.id == widgets.editingId && !searching }?.let { editing ->
+            key(editing) {
+                WidgetEditor(
+                    widget = editing,
+                    limits = rememberSizeLimits(editing, metrics),
+                    cellWidth = cellWidth,
+                    cellHeight = cellHeight,
+                    columns = columns,
+                    rows = rows,
+                    widgets = widgets.placed,
+                    appCells = cells.indices.filter { cells[it] != null }.toSet(),
+                    onCommit = widgets.onUpdate,
+                    onNoRoom = widgets.onNoRoom,
+                    onExit = { widgets.onEdit(null) },
                 )
             }
         }
@@ -292,7 +315,11 @@ private fun HomeGrid(
 }
 
 /** The active icon pack (null: system icons). Icons redraw when it changes. */
-val LocalIconPack = compositionLocalOf<String?> { null }
+/** Identifies the current icon look (pack, themed colors); icons redraw when it changes. */
+val LocalIconStyle = compositionLocalOf<String?> { null }
+
+/** Apps (by [dotKey]) that have notifications; null when notification dots are off. */
+val LocalNotificationDots = compositionLocalOf<Set<String>?> { null }
 
 /** What the home long-press menu offers. */
 class HomeMenuActions(
@@ -352,18 +379,22 @@ private fun ResultCell(
             val appear = remember(match.app.key) { Animatable(if (reduceMotion) 1f else 0f) }
             LaunchedEffect(match.app.key) { appear.animateTo(1f, tween(durationMillis = 160)) }
             val rise = with(LocalDensity.current) { 6.dp.toPx() }
-            AppIcon(
-                app = match.app,
-                repository = repository,
-                highlight = match.matchedIndices,
-                ring = isTop,
-                modifier = Modifier
-                    .graphicsLayer {
-                        alpha = appear.value
-                        translationY = (1f - appear.value) * rise
-                    }
-                    .clickable { onLaunch(match.app) },
-            )
+            var menuOpen by remember { mutableStateOf(false) }
+            Box {
+                AppIcon(
+                    app = match.app,
+                    repository = repository,
+                    highlight = match.matchedIndices,
+                    ring = isTop,
+                    modifier = Modifier
+                        .graphicsLayer {
+                            alpha = appear.value
+                            translationY = (1f - appear.value) * rise
+                        }
+                        .combinedClickable(onClick = { onLaunch(match.app) }, onLongClick = { menuOpen = true }),
+                )
+                AppActionsMenu(match.app, expanded = menuOpen, onDismiss = { menuOpen = false })
+            }
         }
     }
 }
@@ -421,43 +452,29 @@ private fun AppDrawer(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         items(apps, key = { it.key }) { app ->
-            AppIcon(
-                app = app,
-                repository = repository,
-                modifier = Modifier.appDragSource(
-                    key = app.key,
-                    label = app.label,
-                    onTap = { onLaunch(app) },
-                    onDragStart = onDragStart,
-                ),
-            )
+            var menuOpen by remember { mutableStateOf(false) }
+            val view = LocalView.current
+            Box {
+                AppIcon(
+                    app = app,
+                    repository = repository,
+                    modifier = Modifier.drawerAppGestures(
+                        app = app,
+                        icon = { repository.loadIcon(app).bitmap },
+                        onTap = { onLaunch(app) },
+                        onLongPress = { menuOpen = true },
+                        onDragStart = {
+                            menuOpen = false
+                            onDragStart()
+                        },
+                        view = view,
+                    ),
+                )
+                AppActionsMenu(app, expanded = menuOpen, onDismiss = { menuOpen = false })
+            }
         }
     }
 }
-
-/**
- * Tap launches; long-press starts a drag carrying [key].
- *
- * `clickable` can't be combined with `dragAndDropSource`: depending on modifier order, one consumes the
- * touch and the other never fires (verified on the API 37 emulator). So the tap is detected in the
- * Initial pass, before the drag detector sees the event, and nothing is consumed.
- */
-private fun Modifier.appDragSource(key: String, label: String, onTap: () -> Unit, onDragStart: () -> Unit): Modifier =
-    this
-        .pointerInput(key) {
-            awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                val up = waitForUpOrCancellation(pass = PointerEventPass.Initial) ?: return@awaitEachGesture
-                val quick = up.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis
-                val stayed = (up.position - down.position).getDistance() < viewConfiguration.touchSlop
-                if (quick && stayed) onTap()
-            }
-        }
-        .semantics { onClick(label = "Open $label") { onTap(); true } }
-        .dragAndDropSource { _ ->
-            onDragStart()
-            DragAndDropTransferData(ClipData.newPlainText("app", key), localState = KeyspaceDrag)
-        }
 
 @Composable
 private fun DockBar(
@@ -589,15 +606,7 @@ private fun AppSlot(
                             }
                         ),
                 )
-                KeyspaceMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Remove") },
-                        onClick = {
-                            menuOpen = false
-                            onRemove(index)
-                        },
-                    )
-                }
+                AppActionsMenu(app, expanded = menuOpen, onDismiss = { menuOpen = false }, onRemove = { onRemove(index) })
             }
         }
     }
@@ -643,7 +652,8 @@ private fun AppIcon(
 ) {
     // Adaptive icons already come masked to the system shape, and icon pack icons have their own. Legacy
     // icons have neither, so they get a round plate at 72% scale: every icon then has a consistent outline.
-    val loaded = remember(app.key, LocalIconPack.current) { repository.loadIcon(app) }
+    val loaded = remember(app.key, LocalIconStyle.current) { repository.loadIcon(app) }
+    val hasDot = LocalNotificationDots.current?.contains(app.dotKey) == true
     val icon = remember(loaded) { loaded.bitmap.asImageBitmap() }
     val legacy = loaded.needsPlate
     val plate = KeyspaceColors.iconPlate
@@ -657,15 +667,19 @@ private fun AppIcon(
             }
         }
     }
-    IconLayout(label = label, showLabel = showLabel, modifier = modifier.semantics { contentDescription = app.label }) {
-        Box(
-            modifier = Modifier
-                .size(IconSize)
-                .then(if (ring) Modifier.outlineRing(accent, rounded = loaded.fromPack) else Modifier)
-                .then(if (legacy) Modifier.clip(CircleShape).background(plate) else Modifier),
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(bitmap = icon, contentDescription = null, modifier = Modifier.fillMaxSize(if (legacy) 0.72f else 1f))
+    val description = if (hasDot) "${app.label}, has notifications" else app.label
+    IconLayout(label = label, showLabel = showLabel, modifier = modifier.semantics { contentDescription = description }) {
+        Box {
+            Box(
+                modifier = Modifier
+                    .size(IconSize)
+                    .then(if (ring) Modifier.outlineRing(accent, rounded = loaded.fromPack) else Modifier)
+                    .then(if (legacy) Modifier.clip(CircleShape).background(plate) else Modifier),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(bitmap = icon, contentDescription = null, modifier = Modifier.fillMaxSize(if (legacy) 0.72f else 1f))
+            }
+            if (hasDot) NotificationDot(Modifier.align(Alignment.TopEnd))
         }
     }
 }
@@ -688,6 +702,20 @@ private fun Modifier.outlineRing(color: Color, rounded: Boolean): Modifier = dra
     } else {
         drawOval(color, topLeft, ringSize, style = Stroke(stroke))
     }
+}
+
+/** Accent dot with a ring in the panel color, so it reads on any icon and any wallpaper. */
+@Composable
+private fun NotificationDot(modifier: Modifier) {
+    Box(
+        modifier
+            .size(12.dp)
+            .clip(CircleShape)
+            .background(KeyspaceColors.panel)
+            .padding(1.5.dp)
+            .clip(CircleShape)
+            .background(KeyspaceColors.accent)
+    )
 }
 
 /** Empty-cell outline, laid out exactly like an [AppIcon] so it sits where the icon will appear. */
@@ -729,6 +757,12 @@ class WidgetsUi(
     /** A widget [provider] was dropped with its top-left at [row]/[col]; returns whether it was accepted. */
     val onDrop: (row: Int, col: Int, provider: String, grid: GridMetrics) -> Boolean,
     val onRemove: (id: Int) -> Unit,
+    /** The widget being moved or resized, if any. */
+    val editingId: Int?,
+    val onEdit: (id: Int?) -> Unit,
+    val onUpdate: (PlacedWidget) -> Unit,
+    /** A move or resize was released where the widget doesn't fit. */
+    val onNoRoom: () -> Unit,
 )
 
 @Composable
@@ -739,6 +773,7 @@ private fun WidgetCell(
     cellHeight: Dp,
     visible: Boolean,
     onRemove: () -> Unit,
+    onEdit: () -> Unit,
 ) {
     val context = LocalContext.current
     val info = remember(widget.id) { AppWidgetManager.getInstance(context).getAppWidgetInfo(widget.id) }
@@ -778,6 +813,15 @@ private fun WidgetCell(
             )
         }
         KeyspaceMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            if (info != null) {
+                DropdownMenuItem(
+                    text = { Text("Move or resize") },
+                    onClick = {
+                        menuOpen = false
+                        onEdit()
+                    },
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Remove") },
                 onClick = {
@@ -786,5 +830,160 @@ private fun WidgetCell(
                 },
             )
         }
+    }
+}
+
+/** Resize limits for [widget] from its provider, in cells of the current grid. */
+@Composable
+private fun rememberSizeLimits(widget: PlacedWidget, grid: GridMetrics): WidgetSizeLimits {
+    val context = LocalContext.current
+    return remember(widget, grid) {
+        val info = AppWidgetManager.getInstance(context).getAppWidgetInfo(widget.id)
+        val density = context.resources.displayMetrics.density
+        if (info == null) {
+            WidgetSizeLimits(widget.spanX, widget.spanY, widget.spanX, widget.spanY, horizontal = false, vertical = false)
+        } else {
+            val maxW = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) info.maxResizeWidth else 0
+            val maxH = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) info.maxResizeHeight else 0
+            sizeLimits(
+                widget = widget,
+                minWidthDp = info.minWidth / density,
+                minHeightDp = info.minHeight / density,
+                minResizeWidthDp = info.minResizeWidth / density,
+                minResizeHeightDp = info.minResizeHeight / density,
+                maxResizeWidthDp = maxW / density,
+                maxResizeHeightDp = maxH / density,
+                horizontal = info.resizeMode and AppWidgetProviderInfo.RESIZE_HORIZONTAL != 0,
+                vertical = info.resizeMode and AppWidgetProviderInfo.RESIZE_VERTICAL != 0,
+                grid = grid,
+            )
+        }
+    }
+}
+
+/**
+ * Edit mode for one widget: drag the frame to move it, drag an edge handle to resize it in whole cells.
+ * The frame previews where it will land (red when it won't fit); nothing changes until the drag ends.
+ * Tapping anywhere else finishes.
+ */
+@Composable
+private fun WidgetEditor(
+    widget: PlacedWidget,
+    limits: WidgetSizeLimits,
+    cellWidth: Dp,
+    cellHeight: Dp,
+    columns: Int,
+    rows: Int,
+    widgets: List<PlacedWidget>,
+    appCells: Set<Int>,
+    onCommit: (PlacedWidget) -> Unit,
+    onNoRoom: () -> Unit,
+    onExit: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val cellW = with(density) { cellWidth.toPx() }
+    val cellH = with(density) { cellHeight.toPx() }
+    var preview by remember { mutableStateOf(widget) }
+    var valid by remember { mutableStateOf(true) }
+    // Dynamic color makes the error color a pale pink close to the accent, so "won't fit" uses a fixed,
+    // unmistakable red instead.
+    val frameColor = if (valid) KeyspaceColors.accent else NoRoomRed
+
+    fun finish() {
+        when {
+            !valid -> onNoRoom()
+            preview != widget -> onCommit(preview)
+        }
+        preview = widget
+        valid = true
+    }
+
+    /** Shows [candidate] (a valid placement) or, if null, [fallback] in the "won't fit" color. */
+    fun show(candidate: PlacedWidget?, fallback: PlacedWidget) {
+        preview = candidate ?: fallback
+        valid = candidate != null
+    }
+
+    // Tap outside the widget: done.
+    Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { onExit() } })
+
+    Box(
+        Modifier
+            .offset(x = cellWidth * preview.col, y = cellHeight * preview.row)
+            .size(cellWidth * preview.spanX, cellHeight * preview.spanY)
+            .padding(2.dp)
+            .border(2.dp, frameColor, KeyspaceTokens.SmallShape)
+            .background(frameColor.copy(alpha = 0.12f), KeyspaceTokens.SmallShape)
+            .pointerInput(widget) {
+                var drag = Offset.Zero
+                detectDragGestures(
+                    onDragStart = { drag = Offset.Zero },
+                    onDragEnd = { finish() },
+                    onDragCancel = { show(widget, widget) },
+                ) { change, amount ->
+                    change.consume()
+                    drag += amount
+                    val row = (widget.row + (drag.y / cellH).roundToInt()).coerceIn(0, rows - widget.spanY)
+                    val col = (widget.col + (drag.x / cellW).roundToInt()).coerceIn(0, columns - widget.spanX)
+                    show(moveWidget(widget, row, col, columns, rows, widgets, appCells), widget.copy(row = row, col = col))
+                }
+            }
+            .semantics { contentDescription = "Widget: drag to move" },
+    ) {
+        WidgetEdge.entries
+            .filter { if (it == WidgetEdge.Left || it == WidgetEdge.Right) limits.horizontal else limits.vertical }
+            .forEach { edge ->
+                ResizeHandle(
+                    edge = edge,
+                    color = frameColor,
+                    modifier = Modifier
+                        .align(
+                            when (edge) {
+                                WidgetEdge.Left -> Alignment.CenterStart
+                                WidgetEdge.Right -> Alignment.CenterEnd
+                                WidgetEdge.Top -> Alignment.TopCenter
+                                WidgetEdge.Bottom -> Alignment.BottomCenter
+                            }
+                        )
+                        .pointerInput(widget, edge) {
+                            var drag = Offset.Zero
+                            detectDragGestures(
+                                onDragStart = { drag = Offset.Zero },
+                                onDragEnd = { finish() },
+                                onDragCancel = { show(widget, widget) },
+                            ) { change, amount ->
+                                change.consume()
+                                drag += amount
+                                val horizontalEdge = edge == WidgetEdge.Left || edge == WidgetEdge.Right
+                                val delta = if (horizontalEdge) (drag.x / cellW).roundToInt() else (drag.y / cellH).roundToInt()
+                                val resized = resizeWidget(widget, edge, delta, limits, columns, rows, widgets, appCells)
+                                // Invalid sizes still preview (in the "won't fit" color), kept within the grid.
+                                val naive = when (edge) {
+                                    WidgetEdge.Left -> widget.copy(col = widget.col + delta, spanX = widget.spanX - delta)
+                                    WidgetEdge.Right -> widget.copy(spanX = widget.spanX + delta)
+                                    WidgetEdge.Top -> widget.copy(row = widget.row + delta, spanY = widget.spanY - delta)
+                                    WidgetEdge.Bottom -> widget.copy(spanY = widget.spanY + delta)
+                                }.takeIf { it.spanX >= 1 && it.spanY >= 1 && it.fitsIn(columns, rows) } ?: preview
+                                show(resized, naive)
+                            }
+                        },
+                )
+            }
+    }
+}
+
+private val NoRoomRed = Color(0xFFFF5449)
+
+@Composable
+private fun ResizeHandle(edge: WidgetEdge, color: Color, modifier: Modifier) {
+    val label = "Resize from ${edge.name.lowercase()} edge"
+    // A generous touch target with a small visible pill.
+    Box(modifier.size(36.dp).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        val vertical = edge == WidgetEdge.Left || edge == WidgetEdge.Right
+        Box(
+            Modifier
+                .size(if (vertical) 6.dp else 24.dp, if (vertical) 24.dp else 6.dp)
+                .background(color, CircleShape)
+        )
     }
 }
