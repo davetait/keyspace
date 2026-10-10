@@ -38,4 +38,6 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    // A working XML pull parser for unit tests; Android's own is unavailable off-device.
+    testImplementation(libs.kxml2)
 }

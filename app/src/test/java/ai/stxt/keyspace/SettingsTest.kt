@@ -20,4 +20,11 @@ class SettingsTest {
         assertEquals(KeyspaceSettings(4, AdaptSpeed.Normal), KeyspaceSettings.parse(1, "Turbo"))
         assertEquals(7, KeyspaceSettings.parse(12, null).columns)
     }
+
+    @Test
+    fun `icon pack is read back, and blank means system icons`() {
+        assertEquals("com.example.pack", KeyspaceSettings.parse(5, "Normal", "com.example.pack").iconPack)
+        assertEquals(null, KeyspaceSettings.parse(5, "Normal", " ").iconPack)
+        assertEquals(null, KeyspaceSettings.parse(null, null).iconPack)
+    }
 }

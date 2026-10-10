@@ -4,7 +4,7 @@ import android.content.ClipData
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.drawBehind
-import android.graphics.drawable.AdaptiveIconDrawable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.AnnotatedString
@@ -286,6 +286,9 @@ private fun HomeGrid(
     }
     HomeMenu(at = menuAt, actions = homeMenu, onDismiss = { menuAt = null })
 }
+
+/** The active icon pack (null: system icons). Icons redraw when it changes. */
+val LocalIconPack = compositionLocalOf<String?> { null }
 
 /** What the home long-press menu offers. */
 class HomeMenuActions(
@@ -634,11 +637,11 @@ private fun AppIcon(
     /** Accent ring marking the top search result. */
     ring: Boolean = false,
 ) {
-    // Adaptive icons already come masked to the system shape. Legacy icons don't, so they get a round
-    // plate at 72% scale: every icon then has the same outline.
-    val (icon, legacy) = remember(app.key) {
-        val drawable = repository.loadIcon(app)
-        drawable.toBitmap().asImageBitmap() to (drawable !is AdaptiveIconDrawable)
+    // Adaptive icons already come masked to the system shape, and icon pack icons have their own. Legacy
+    // icons have neither, so they get a round plate at 72% scale: every icon then has a consistent outline.
+    val (icon, legacy) = remember(app.key, LocalIconPack.current) {
+        val loaded = repository.loadIcon(app)
+        loaded.drawable.toBitmap().asImageBitmap() to loaded.needsPlate
     }
     val plate = KeyspaceColors.iconPlate
     val accent = KeyspaceColors.accent

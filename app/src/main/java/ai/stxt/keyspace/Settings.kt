@@ -16,15 +16,18 @@ enum class AdaptSpeed(val halfLifeDays: Double, val description: String) {
 data class KeyspaceSettings(
     val columns: Int = DEFAULT_COLUMNS,
     val adaptSpeed: AdaptSpeed = AdaptSpeed.Normal,
+    /** Package of the chosen icon pack; null for the system icons. */
+    val iconPack: String? = null,
 ) {
     companion object {
         const val DEFAULT_COLUMNS = 5
         val COLUMN_RANGE = 4..7
 
         /** Tolerates missing or out-of-range stored values by falling back to defaults. */
-        fun parse(columns: Int?, adaptSpeed: String?) = KeyspaceSettings(
+        fun parse(columns: Int?, adaptSpeed: String?, iconPack: String? = null) = KeyspaceSettings(
             columns = columns?.coerceIn(COLUMN_RANGE) ?: DEFAULT_COLUMNS,
             adaptSpeed = AdaptSpeed.entries.firstOrNull { it.name == adaptSpeed } ?: AdaptSpeed.Normal,
+            iconPack = iconPack?.takeIf { it.isNotBlank() },
         )
     }
 }
@@ -36,6 +39,7 @@ class SettingsStore(context: Context) {
         KeyspaceSettings.parse(
             columns = if (prefs.contains(COLUMNS)) prefs.getInt(COLUMNS, 0) else null,
             adaptSpeed = prefs.getString(ADAPT_SPEED, null),
+            iconPack = prefs.getString(ICON_PACK, null),
         )
     )
     val settings: StateFlow<KeyspaceSettings> = _settings.asStateFlow()
@@ -44,16 +48,20 @@ class SettingsStore(context: Context) {
 
     fun setAdaptSpeed(speed: AdaptSpeed) = update(_settings.value.copy(adaptSpeed = speed))
 
+    fun setIconPack(packageName: String?) = update(_settings.value.copy(iconPack = packageName))
+
     private fun update(settings: KeyspaceSettings) {
         _settings.value = settings
         prefs.edit {
             putInt(COLUMNS, settings.columns)
             putString(ADAPT_SPEED, settings.adaptSpeed.name)
+            if (settings.iconPack == null) remove(ICON_PACK) else putString(ICON_PACK, settings.iconPack)
         }
     }
 
     private companion object {
         const val COLUMNS = "columns"
         const val ADAPT_SPEED = "adapt_speed"
+        const val ICON_PACK = "icon_pack"
     }
 }

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <iconback img1="tp_back" />
+    <iconmask img1="tp_mask" />
+    <iconupon img1="tp_upon" />
+    <scale factor="0.6" />
+
+    <item component="ComponentInfo{com.android.chrome/com.google.android.apps.chrome.Main}" drawable="tp_chrome" />
+    <!-- Shorthand class name, as some packs write it. -->
+    <item component="ComponentInfo{com.android.settings/.Settings}" drawable="tp_settings" />
+    <item component="ComponentInfo{com.google.android.gm/com.google.android.gm.ConversationListActivityGmail}" drawable="tp_gmail" />
+    <calendar component="ComponentInfo{com.google.android.calendar/com.android.calendar.AllInOneActivity}" prefix="tp_cal_" />
+
+    <!-- Deliberately broken entries: must be ignored without errors. -->
+    <item component="not a component" drawable="tp_chrome" />
+    <item component="ComponentInfo{com.example.missing/com.example.Main}" drawable="does_not_exist" />
+</resources>

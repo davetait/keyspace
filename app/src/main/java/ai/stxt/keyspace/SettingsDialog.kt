@@ -1,6 +1,16 @@
 package ai.stxt.keyspace
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.core.graphics.drawable.toBitmap
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.draw.clip
+import androidx.compose.material3.RadioButton
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -38,6 +48,9 @@ fun SettingsDialog(
     onColumnsChange: (Int) -> Unit,
     onAdaptSpeedChange: (AdaptSpeed) -> Unit,
     onClearSearchHistory: () -> Unit,
+    iconPacks: List<IconPackInfo>,
+    onIconPackChange: (String?) -> Unit,
+    onFindIconPacks: () -> Unit,
     onOpenHomeSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -86,6 +99,32 @@ fun SettingsDialog(
                     }
                 }
 
+                Section("Icon pack", "Restyle app icons with an icon pack app") {
+                    Column {
+                        IconPackRow("System icons", icon = null, selected = settings.iconPack == null) { onIconPackChange(null) }
+                        iconPacks.forEach { pack ->
+                            val context = LocalContext.current
+                            val icon = remember(pack.packageName) {
+                                runCatching { context.packageManager.getApplicationIcon(pack.packageName).toBitmap().asImageBitmap() }.getOrNull()
+                            }
+                            IconPackRow(pack.label, icon, selected = settings.iconPack == pack.packageName) {
+                                onIconPackChange(pack.packageName)
+                            }
+                        }
+                        if (iconPacks.isEmpty()) {
+                            Text(
+                                "No icon packs installed",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 8.dp),
+                            )
+                        }
+                        OutlinedButton(onClick = onFindIconPacks, shape = KeyspaceTokens.SmallShape, modifier = Modifier.padding(top = 8.dp)) {
+                            Text("Find icon packs")
+                        }
+                    }
+                }
+
                 var confirmClear by remember { mutableStateOf(false) }
                 Section("Search history", "Forget which apps you open most, so search results go back to alphabetical") {
                     if (confirmClear) {
@@ -125,5 +164,23 @@ private fun Section(title: String, description: String, content: @Composable () 
         Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(0.dp))
         content()
+    }
+}
+
+@Composable
+private fun IconPackRow(label: String, icon: ImageBitmap?, selected: Boolean, onSelect: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(KeyspaceTokens.SmallShape)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(vertical = 6.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        if (icon != null) {
+            Image(icon, contentDescription = null, modifier = Modifier.padding(start = 8.dp).size(28.dp))
+        }
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 12.dp))
     }
 }

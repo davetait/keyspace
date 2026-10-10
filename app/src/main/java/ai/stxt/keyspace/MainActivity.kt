@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -106,6 +107,15 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val settings by settingsStore.settings.collectAsState()
+                var iconPacks by remember { mutableStateOf(emptyList<IconPackInfo>()) }
+                // Applied before icons are drawn; null if the chosen pack couldn't be loaded.
+                val activeIconPack = remember(settings.iconPack) {
+                    settings.iconPack.takeIf { repository.setIconPack(it) }
+                }
+                LaunchedEffect(activeIconPack, settings.iconPack) {
+                    // The chosen pack is gone (uninstalled or broken): go back to system icons.
+                    if (settings.iconPack != null && activeIconPack == null) settingsStore.setIconPack(null)
+                }
                 var showSettings by rememberSaveable { mutableStateOf(false) }
                 // Refreshed on resume, e.g. after returning from the system Home app screen.
                 var isHome by remember { mutableStateOf(isDefaultHome()) }
@@ -134,6 +144,11 @@ class MainActivity : ComponentActivity() {
                 LifecycleResumeEffect(Unit) {
                     val scope = MainScope()
                     scope.launch { apps = repository.loadApps() }
+                    iconPacks = findIconPacks(this@MainActivity)
+                    // The pack may have been uninstalled while Keyspace was in the background.
+                    settingsStore.settings.value.iconPack?.let { chosen ->
+                        if (iconPacks.none { it.packageName == chosen }) settingsStore.setIconPack(null)
+                    }
                     isHome = isDefaultHome()
                     onPauseOrDispose {
                         scope.cancel()
@@ -148,6 +163,9 @@ class MainActivity : ComponentActivity() {
                         onColumnsChange = settingsStore::setColumns,
                         onAdaptSpeedChange = settingsStore::setAdaptSpeed,
                         onClearSearchHistory = launchStats::clear,
+                        iconPacks = iconPacks,
+                        onIconPackChange = settingsStore::setIconPack,
+                        onFindIconPacks = { openIconPackStore() },
                         onOpenHomeSettings = { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) },
                         onDismiss = { showSettings = false },
                     )
@@ -171,82 +189,84 @@ class MainActivity : ComponentActivity() {
                 // Back closes the drawer; on the bare home screen there is nothing to go back to.
                 BackHandler { drawerState = DrawerState.Closed }
 
-                HomeScreen(
-                    apps = apps,
-                    grid = grid,
-                    gridColumns = settings.columns,
-                    dock = dock,
-                    drawerState = drawerState,
-                    repository = repository,
-                    onDrawerStateChange = { drawerState = it },
-                    onPlace = { area, index, key -> stores.getValue(area).place(index, key) },
-                    onRemove = { area, index -> stores.getValue(area).clear(index) },
-                    results = results,
-                    onLaunchResult = { app ->
-                        repository.launch(app)
-                        launchStats.record(app.key, halfLife)
-                        typed = ""
-                    },
-                    homeMenu = HomeMenuActions(
-                        onWallpaper = { openWallpaperPicker() },
-                        onWidgets = { drawerState = DrawerState(Overlay.Widgets) },
-                        onSettings = { showSettings = true },
-                    ),
-                    widgets = WidgetsUi(
-                        host = widgetHost,
-                        placed = placedWidgets,
-                        choices = widgetChoices,
-                        metrics = gridMetrics,
-                        onMetrics = { gridMetrics = it },
-                        onDrop = { row, col, provider, metrics ->
-                            // Only widgets from the installed list; anything else is refused rather than trusted.
-                            val choice = widgetChoices.firstOrNull { it.provider.flattenToString() == provider }
-                                ?: return@WidgetsUi false
-                            val (spanX, spanY) =
-                                spanFor(choice.minWidthDp, choice.minHeightDp, choice.targetCellsX, choice.targetCellsY, metrics)
-                            val appCells = grid.resolve(apps, metrics.rows * metrics.columns)
-                                .mapIndexedNotNull { index, app -> index.takeIf { app != null } }
-                                .toSet()
-                            if (canPlace(row, col, spanX, spanY, metrics.columns, metrics.rows, placedWidgets, appCells)) {
-                                addWidget(choice.provider, PlacedWidget(-1, row, col, spanX, spanY))
-                                true
-                            } else {
-                                status = "Not enough room there"
-                                false
-                            }
+                CompositionLocalProvider(LocalIconPack provides activeIconPack) {
+                    HomeScreen(
+                        apps = apps,
+                        grid = grid,
+                        gridColumns = settings.columns,
+                        dock = dock,
+                        drawerState = drawerState,
+                        repository = repository,
+                        onDrawerStateChange = { drawerState = it },
+                        onPlace = { area, index, key -> stores.getValue(area).place(index, key) },
+                        onRemove = { area, index -> stores.getValue(area).clear(index) },
+                        results = results,
+                        onLaunchResult = { app ->
+                            repository.launch(app)
+                            launchStats.record(app.key, halfLife)
+                            typed = ""
                         },
-                        onRemove = { id ->
-                            widgetStore.remove(id)
-                            widgetHost.deleteAppWidgetId(id)
-                        },
-                    ),
-                ) {
-                    Column {
-                        TypedLine(text = typed, status = status, noMatches = results?.isEmpty() == true)
-                        Keyboard(
-                            listening = listening,
-                            litKeys = litKeys,
-                            onLetter = {
-                                status = null
-                                closeDrawerForInput()
-                                typed = TypedText.type(typed, it)
-                            },
-                            onBackspace = {
-                                status = null
-                                closeDrawerForInput()
-                                typed = TypedText.backspace(typed)
-                            },
-                            onMic = {
-                                status = null
-                                closeDrawerForInput()
-                                when {
-                                    listening -> speech.stop()
-                                    ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) ==
-                                        PackageManager.PERMISSION_GRANTED -> speech.start()
-                                    else -> micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        homeMenu = HomeMenuActions(
+                            onWallpaper = { openWallpaperPicker() },
+                            onWidgets = { drawerState = DrawerState(Overlay.Widgets) },
+                            onSettings = { showSettings = true },
+                        ),
+                        widgets = WidgetsUi(
+                            host = widgetHost,
+                            placed = placedWidgets,
+                            choices = widgetChoices,
+                            metrics = gridMetrics,
+                            onMetrics = { gridMetrics = it },
+                            onDrop = { row, col, provider, metrics ->
+                                // Only widgets from the installed list; anything else is refused rather than trusted.
+                                val choice = widgetChoices.firstOrNull { it.provider.flattenToString() == provider }
+                                    ?: return@WidgetsUi false
+                                val (spanX, spanY) =
+                                    spanFor(choice.minWidthDp, choice.minHeightDp, choice.targetCellsX, choice.targetCellsY, metrics)
+                                val appCells = grid.resolve(apps, metrics.rows * metrics.columns)
+                                    .mapIndexedNotNull { index, app -> index.takeIf { app != null } }
+                                    .toSet()
+                                if (canPlace(row, col, spanX, spanY, metrics.columns, metrics.rows, placedWidgets, appCells)) {
+                                    addWidget(choice.provider, PlacedWidget(-1, row, col, spanX, spanY))
+                                    true
+                                } else {
+                                    status = "Not enough room there"
+                                    false
                                 }
                             },
-                        )
+                            onRemove = { id ->
+                                widgetStore.remove(id)
+                                widgetHost.deleteAppWidgetId(id)
+                            },
+                        ),
+                    ) {
+                        Column {
+                            TypedLine(text = typed, status = status, noMatches = results?.isEmpty() == true)
+                            Keyboard(
+                                listening = listening,
+                                litKeys = litKeys,
+                                onLetter = {
+                                    status = null
+                                    closeDrawerForInput()
+                                    typed = TypedText.type(typed, it)
+                                },
+                                onBackspace = {
+                                    status = null
+                                    closeDrawerForInput()
+                                    typed = TypedText.backspace(typed)
+                                },
+                                onMic = {
+                                    status = null
+                                    closeDrawerForInput()
+                                    when {
+                                        listening -> speech.stop()
+                                        ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) ==
+                                            PackageManager.PERMISSION_GRANTED -> speech.start()
+                                        else -> micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }

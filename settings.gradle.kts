@@ -15,3 +15,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "keyspace"
 include(":app")
+// Test fixture: a minimal icon pack app, never shipped.
+include(":testiconpack")

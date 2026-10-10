@@ -10,6 +10,27 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- Icon packs (see ICON_PACK_ACTIONS in IconPack.kt). -->
+        <intent>
+            <action android:name="org.adw.launcher.THEMES" />
+        </intent>
+        <intent>
+            <action android:name="com.novalauncher.THEME" />
+        </intent>
+        <intent>
+            <action android:name="com.anddoes.launcher.THEME" />
+        </intent>
+        <intent>
+            <action android:name="com.gau.go.launcherex.theme" />
+        </intent>
+        <intent>
+            <action android:name="ch.deletescape.lawnchair.ICONPACK" />
+        </intent>
+        <!-- "Find icon packs": open the Play Store search. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="market" />
+        </intent>
         <!-- Wallpaper option: find the system wallpaper picker. -->
         <intent>
             <action android:name="android.intent.action.SET_WALLPAPER" />
