@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
         val gridStore = SlotStore(applicationContext, "grid")
         val dockStore = SlotStore(applicationContext, "dock")
         val stores = mapOf(SlotArea.Grid to gridStore, SlotArea.Dock to dockStore)
+        val launchStats = LaunchStats(applicationContext)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
@@ -45,6 +46,11 @@ class MainActivity : ComponentActivity() {
                 var typed by rememberSaveable { mutableStateOf("") }
                 var status by remember { mutableStateOf<String?>(null) }
                 var listening by remember { mutableStateOf(false) }
+
+                val usage by launchStats.usage.collectAsState()
+                val results = remember(apps, typed, usage) {
+                    if (typed.isBlank()) null else searchApps(apps, typed, usage, System.currentTimeMillis())
+                }
 
                 val speech = remember {
                     SpeechInput(
@@ -70,6 +76,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Search results show in the home area, which the open drawer would cover.
+                fun closeDrawerForInput() {
+                    if (drawerState == DrawerState.Open) drawerState = DrawerState.Closed
+                }
+
                 // Back closes the drawer; on the bare home screen there is nothing to go back to.
                 BackHandler { drawerState = DrawerState.Closed }
 
@@ -84,6 +95,12 @@ class MainActivity : ComponentActivity() {
                     onDrawerStateChange = { drawerState = it },
                     onPlace = { area, index, key -> stores.getValue(area).place(index, key) },
                     onRemove = { area, index -> stores.getValue(area).clear(index) },
+                    results = results,
+                    onLaunchResult = { app ->
+                        repository.launch(app)
+                        launchStats.record(app.key)
+                        typed = ""
+                    },
                 ) {
                     Column {
                         TypedLine(text = typed, status = status)
@@ -91,14 +108,17 @@ class MainActivity : ComponentActivity() {
                             listening = listening,
                             onLetter = {
                                 status = null
+                                closeDrawerForInput()
                                 typed = TypedText.type(typed, it)
                             },
                             onBackspace = {
                                 status = null
+                                closeDrawerForInput()
                                 typed = TypedText.backspace(typed)
                             },
                             onMic = {
                                 status = null
+                                closeDrawerForInput()
                                 when {
                                     listening -> speech.stop()
                                     ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) ==

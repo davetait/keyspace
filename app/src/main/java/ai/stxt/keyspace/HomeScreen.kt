@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -62,6 +63,7 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -78,6 +80,7 @@ enum class SlotArea { Grid, Dock }
 private val IconSize = 48.dp
 private val GridCellHeight = 96.dp
 private const val DockSize = 4
+private const val ResultRows = 2
 
 @Composable
 fun HomeScreen(
@@ -90,6 +93,8 @@ fun HomeScreen(
     onDrawerStateChange: (DrawerState) -> Unit,
     onPlace: (area: SlotArea, index: Int, key: String) -> Unit,
     onRemove: (area: SlotArea, index: Int) -> Unit,
+    results: List<AppEntry>?,
+    onLaunchResult: (AppEntry) -> Unit,
     inputArea: @Composable () -> Unit,
 ) {
     val onDragEnded = { if (drawerState == DrawerState.Dragging) onDrawerStateChange(DrawerState.Closed) }
@@ -105,6 +110,9 @@ fun HomeScreen(
                 onPlace = { index, key -> onPlace(SlotArea.Grid, index, key) },
                 onRemove = { index -> onRemove(SlotArea.Grid, index) },
                 onDragEnded = onDragEnded,
+                // A drag needs the grid's drop targets, so it takes priority over search results.
+                results = results.takeIf { drawerState != DrawerState.Dragging },
+                onLaunchResult = onLaunchResult,
             )
             DrawerOverlay(apps, drawerState, repository, onDrawerStateChange)
         }
@@ -124,7 +132,11 @@ fun HomeScreen(
     }
 }
 
-/** [columns] across; as many rows as fit the available height. Cells are numbered row by row. */
+/**
+ * [columns] across; as many rows as fit the available height. Cells are numbered row by row.
+ * While searching ([results] non-null), shortcuts are hidden and the bottom [ResultRows] rows show results,
+ * best match in the bottom row, closest to the keyboard.
+ */
 @Composable
 private fun HomeGrid(
     slots: AppSlots,
@@ -135,31 +147,63 @@ private fun HomeGrid(
     onPlace: (index: Int, key: String) -> Unit,
     onRemove: (index: Int) -> Unit,
     onDragEnded: () -> Unit,
+    results: List<AppEntry>?,
+    onLaunchResult: (AppEntry) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 8.dp)) {
         val rows = (maxHeight / GridCellHeight).toInt().coerceAtLeast(1)
         val cells = slots.resolve(apps, rows * columns)
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
-            for (row in 0 until rows) {
-                Row(Modifier.fillMaxWidth().height(GridCellHeight)) {
-                    for (col in 0 until columns) {
-                        val index = row * columns + col
-                        AppSlot(
-                            index = index,
-                            app = cells[index],
-                            description = "Home cell ${row + 1}, ${col + 1}",
-                            showLabel = true,
-                            showEmptyOutline = dragging,
-                            emphasizeOutline = dragging,
-                            repository = repository,
-                            onPlace = onPlace,
-                            onRemove = onRemove,
-                            onDragEnded = onDragEnded,
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                        )
-                    }
+        val resultRows = results?.let { bottomUpRows(it, columns, minOf(ResultRows, rows)) }
+        val searching = resultRows != null
+
+        // The shortcut grid always stays composed, even while searching (then invisible and inert): a drag
+        // only reaches drop targets that exist when it starts, and a drag can start while text is typed.
+        val hidden = if (searching) Modifier.alpha(0f).clearAndSetSemantics {} else Modifier
+        GridRows(rows, hidden) { row ->
+            for (col in 0 until columns) {
+                val index = row * columns + col
+                AppSlot(
+                    index = index,
+                    app = cells[index],
+                    description = "Home cell ${row + 1}, ${col + 1}",
+                    showLabel = true,
+                    showEmptyOutline = dragging,
+                    emphasizeOutline = dragging,
+                    interactive = !searching,
+                    repository = repository,
+                    onPlace = onPlace,
+                    onRemove = onRemove,
+                    onDragEnded = onDragEnded,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                )
+            }
+        }
+        if (resultRows != null) {
+            // Same row layout as the grid; only the bottom rows get results, right above the keyboard.
+            GridRows(rows) { row ->
+                resultRows.getOrNull(row - (rows - resultRows.size))?.forEach { app ->
+                    ResultCell(app, repository, onLaunchResult, Modifier.weight(1f).fillMaxHeight())
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun GridRows(rows: Int, modifier: Modifier = Modifier, row: @Composable RowScope.(Int) -> Unit) {
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceEvenly) {
+        for (index in 0 until rows) {
+            Row(Modifier.fillMaxWidth().height(GridCellHeight)) { row(index) }
+        }
+    }
+}
+
+/** One search result: tap launches. Empty cells keep the row's spacing. */
+@Composable
+private fun ResultCell(app: AppEntry?, repository: AppRepository, onLaunch: (AppEntry) -> Unit, modifier: Modifier) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        if (app != null) {
+            AppIcon(app = app, repository = repository, modifier = Modifier.clickable { onLaunch(app) })
         }
     }
 }
@@ -301,6 +345,8 @@ private fun AppSlot(
     onDragEnded: () -> Unit,
     modifier: Modifier,
     emphasizeOutline: Boolean = false,
+    /** False while hidden behind search results: stays a drop target but ignores taps. */
+    interactive: Boolean = true,
 ) {
     var highlighted by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -349,9 +395,15 @@ private fun AppSlot(
                     showLabel = showLabel,
                     modifier = Modifier
                         .then(if (highlighted) Modifier.border(2.dp, ring, highlightShape) else Modifier)
-                        .combinedClickable(
-                            onClick = { repository.launch(app) },
-                            onLongClick = { menuOpen = true },
+                        .then(
+                            if (interactive) {
+                                Modifier.combinedClickable(
+                                    onClick = { repository.launch(app) },
+                                    onLongClick = { menuOpen = true },
+                                )
+                            } else {
+                                Modifier
+                            }
                         ),
                 )
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
