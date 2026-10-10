@@ -1,6 +1,9 @@
 package ai.stxt.keyspace
 
 import android.content.ClipData
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.padding
+import android.graphics.Paint
 import android.content.pm.ShortcutInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -46,7 +49,14 @@ val LocalAppActions = staticCompositionLocalOf<AppActions> { error("AppActions n
  * default home app), App info, Uninstall, Rename, and [onRemove] for shortcuts placed on the home screen.
  */
 @Composable
-fun AppActionsMenu(app: AppEntry, expanded: Boolean, onDismiss: () -> Unit, onRemove: (() -> Unit)? = null) {
+fun AppActionsMenu(
+    app: AppEntry,
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onRemove: (() -> Unit)? = null,
+    /** Explains that the icon can be dragged (where it can). */
+    showDragHint: Boolean = false,
+) {
     val actions = LocalAppActions.current
     val repo = actions.repository
     // Loaded off the main thread each time the menu opens; shortcuts change as apps update them.
@@ -67,6 +77,14 @@ fun AppActionsMenu(app: AppEntry, expanded: Boolean, onDismiss: () -> Unit, onRe
     }
 
     KeyspaceMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        if (showDragHint) {
+            Text(
+                "Hold and drag to move",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
         shortcuts.forEach { (shortcut, icon) ->
             DropdownMenuItem(
                 text = { Text(shortcut.shortLabel?.toString() ?: shortcut.id) },
@@ -101,6 +119,8 @@ fun Modifier.appIconGestures(
     onDragStart: () -> Unit,
     view: View,
     origin: SlotRef? = null,
+    /** True while the icon is long-pressed and held (it should look "lifted"); false once released or dragged. */
+    onHeldChange: (Boolean) -> Unit = {},
 ): Modifier = this
     .pointerInput(app.key, origin) {
         awaitEachGesture {
@@ -129,21 +149,29 @@ fun Modifier.appIconGestures(
                 true -> if (moved <= slop) onTap()
                 false -> Unit
                 null -> {
-                    // Phase 2: long-press. Show the menu; dragging on from here starts a drag.
+                    // Phase 2: long-press. Lift the icon and show the menu; dragging on from here starts a drag.
                     view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    onHeldChange(true)
                     onLongPress()
                     val start = currentEvent.changes.firstOrNull()?.position ?: down.position
-                    while (true) {
-                        val event = awaitPointerEvent(PointerEventPass.Main)
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        // Keep the drawer from scrolling under a held icon.
-                        change.consume()
-                        if (!change.pressed) break
-                        if ((change.position - start).getDistance() > slop) {
-                            onDragStart()
-                            startAppDrag(view, app, icon(), origin)
-                            break
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Main)
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            // Keep the drawer from scrolling under a held icon.
+                            change.consume()
+                            if (!change.pressed) break
+                            if ((change.position - start).getDistance() > slop) {
+                                // The drag image (also lifted) takes over from the icon.
+                                onHeldChange(false)
+                                onDragStart()
+                                startAppDrag(view, app, icon(), origin)
+                                break
+                            }
                         }
+                    } finally {
+                        // Released, cancelled, or the composable went away: settle back down.
+                        onHeldChange(false)
                     }
                 }
             }
@@ -156,7 +184,17 @@ fun Modifier.appIconGestures(
 
 /** Starts the same drag the drop targets accept (see [KeyspaceDrag]), with the icon as the drag image. */
 private fun startAppDrag(view: View, app: AppEntry, icon: Bitmap, origin: SlotRef?) {
-    val sizePx = (56 * view.resources.displayMetrics.density).toInt()
+    val density = view.resources.displayMetrics.density
+    // The icon at its lifted size (48dp × LIFT_SCALE), with room around it for a soft drop shadow.
+    val iconPx = (48 * LIFT_SCALE * density).toInt()
+    val pad = (10 * density).toInt()
+    val sizePx = iconPx + 2 * pad
+    // Draws only a soft shadow: the shape itself is almost fully transparent (fully transparent paint
+    // would draw no shadow either).
+    val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.argb(1, 0, 0, 0)
+        setShadowLayer(6 * density, 0f, 3 * density, 0x66000000)
+    }
     val shadow = object : View.DragShadowBuilder(view) {
         override fun onProvideShadowMetrics(outShadowSize: Point, outShadowTouchPoint: Point) {
             outShadowSize.set(sizePx, sizePx)
@@ -164,8 +202,12 @@ private fun startAppDrag(view: View, app: AppEntry, icon: Bitmap, origin: SlotRe
         }
 
         override fun onDrawShadow(canvas: Canvas) {
-            canvas.drawBitmap(icon, null, Rect(0, 0, sizePx, sizePx), null)
+            canvas.drawCircle(sizePx / 2f, sizePx / 2f, iconPx / 2f * 0.96f, shadowPaint)
+            canvas.drawBitmap(icon, null, Rect(pad, pad, pad + iconPx, pad + iconPx), null)
         }
     }
     view.startDragAndDrop(ClipData.newPlainText("app", app.key), shadow, KeyspaceDrag(origin), 0)
 }
+
+/** How much a long-pressed icon grows to show it's picked up (as on the Pixel launcher). */
+const val LIFT_SCALE = 1.12f

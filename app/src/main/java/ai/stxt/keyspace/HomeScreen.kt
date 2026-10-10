@@ -1,6 +1,11 @@
 package ai.stxt.keyspace
 
 import android.content.ClipData
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.CompositionLocalProvider
 import kotlin.math.roundToInt
@@ -400,10 +405,7 @@ private fun ResultCell(
         if (match != null) {
             // The one ambient motion: a result that newly appears in this cell rises 6dp and fades in.
             // Skipped when the system "Remove animations" setting is on.
-            val context = LocalContext.current
-            val reduceMotion = remember {
-                Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
-            }
+            val reduceMotion = rememberReduceMotion()
             val appear = remember(match.app.key) { Animatable(if (reduceMotion) 1f else 0f) }
             LaunchedEffect(match.app.key) { appear.animateTo(1f, tween(durationMillis = 160)) }
             val rise = with(LocalDensity.current) { 6.dp.toPx() }
@@ -481,11 +483,13 @@ private fun AppDrawer(
     ) {
         items(apps, key = { it.key }) { app ->
             var menuOpen by remember { mutableStateOf(false) }
+            var held by remember { mutableStateOf(false) }
             val view = LocalView.current
             Box {
                 AppIcon(
                     app = app,
                     repository = repository,
+                    held = held,
                     modifier = Modifier.appIconGestures(
                         app = app,
                         icon = { repository.loadIcon(app).bitmap },
@@ -496,9 +500,10 @@ private fun AppDrawer(
                             onDragStart()
                         },
                         view = view,
+                        onHeldChange = { held = it },
                     ),
                 )
-                AppActionsMenu(app, expanded = menuOpen, onDismiss = { menuOpen = false })
+                AppActionsMenu(app, expanded = menuOpen, onDismiss = { menuOpen = false }, showDragHint = true)
             }
         }
     }
@@ -625,11 +630,13 @@ private fun AppSlot(
             if (showEmptyOutline || highlighted) EmptyIcon(ring, showLabel)
         } else {
             val view = LocalView.current
+            var held by remember { mutableStateOf(false) }
             Box {
                 AppIcon(
                     app = app,
                     repository = repository,
                     showLabel = showLabel,
+                    held = held,
                     modifier = Modifier
                         // The icon being dragged stays in place, dimmed, until it's dropped.
                         .alpha(if (slotDrag?.from == here) 0.3f else 1f)
@@ -647,13 +654,20 @@ private fun AppSlot(
                                     },
                                     view = view,
                                     origin = here,
+                                    onHeldChange = { held = it },
                                 )
                             } else {
                                 Modifier
                             }
                         ),
                 )
-                AppActionsMenu(app, expanded = menuOpen, onDismiss = { menuOpen = false }, onRemove = { onRemove(index) })
+                AppActionsMenu(
+                    app,
+                    expanded = menuOpen,
+                    onDismiss = { menuOpen = false },
+                    onRemove = { onRemove(index) },
+                    showDragHint = true,
+                )
             }
         }
     }
@@ -696,6 +710,8 @@ private fun AppIcon(
     highlight: List<Int> = emptyList(),
     /** Accent ring marking the top search result; follows the icon's outline. */
     ring: Boolean = false,
+    /** Long-pressed and held: the icon lifts (and wiggles once) to show it can be dragged. */
+    held: Boolean = false,
 ) {
     // Adaptive icons already come masked to the system shape, and icon pack icons have their own. Legacy
     // icons have neither, so they get a round plate at 72% scale: every icon then has a consistent outline.
@@ -719,6 +735,7 @@ private fun AppIcon(
         Box {
             Box(
                 modifier = Modifier
+                    .liftOnHold(held, rounded = loaded.fromPack)
                     .size(IconSize)
                     .then(if (ring) Modifier.outlineRing(accent, rounded = loaded.fromPack) else Modifier)
                     .then(if (legacy) Modifier.clip(CircleShape).background(plate) else Modifier),
@@ -748,6 +765,55 @@ private fun Modifier.outlineRing(color: Color, rounded: Boolean): Modifier = dra
         drawRoundRect(color, topLeft, ringSize, CornerRadius(radius), style = Stroke(stroke))
     } else {
         drawOval(color, topLeft, ringSize, style = Stroke(stroke))
+    }
+}
+
+/** True when "Remove animations" is on in system settings. */
+@Composable
+private fun rememberReduceMotion(): Boolean {
+    val context = LocalContext.current
+    return remember {
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+    }
+}
+
+/**
+ * Android's "picked up" cue (as on the Pixel launcher): while [held], the icon grows by [LIFT_SCALE] with a
+ * soft shadow, and gives one short wiggle as it lifts. With reduced motion it just lifts, without animating.
+ */
+@Composable
+private fun Modifier.liftOnHold(held: Boolean, rounded: Boolean): Modifier {
+    val reduceMotion = rememberReduceMotion()
+    val lift by animateFloatAsState(
+        targetValue = if (held) 1f else 0f,
+        animationSpec = if (reduceMotion) snap() else spring(stiffness = Spring.StiffnessMediumLow),
+        label = "lift",
+    )
+    val wiggle = remember { Animatable(0f) }
+    LaunchedEffect(held) {
+        if (held && !reduceMotion) {
+            wiggle.animateTo(0f, keyframes {
+                durationMillis = 300
+                6f at 50
+                -6f at 120
+                4f at 190
+                -4f at 250
+                0f at 300
+            })
+        } else {
+            wiggle.snapTo(0f)
+        }
+    }
+    val elevation = with(LocalDensity.current) { 8.dp.toPx() }
+    val shape = if (rounded) KeyspaceTokens.SmallShape else CircleShape
+    return graphicsLayer {
+        val scale = 1f + (LIFT_SCALE - 1f) * lift
+        scaleX = scale
+        scaleY = scale
+        rotationZ = wiggle.value
+        shadowElevation = elevation * lift
+        this.shape = shape
+        clip = false
     }
 }
 
