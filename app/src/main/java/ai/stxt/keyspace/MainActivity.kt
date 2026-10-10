@@ -327,6 +327,11 @@ class MainActivity : ComponentActivity() {
                             onDrawerStateChange = { drawerState = it },
                             onPlace = { area, index, key -> stores.getValue(area).place(index, key) },
                             onRemove = { area, index -> stores.getValue(area).clear(index) },
+                            onRearrange = { from, to ->
+                                val (newGrid, newDock) = rearrange(grid, dock, from, to)
+                                gridStore.set(newGrid)
+                                dockStore.set(newDock)
+                            },
                             results = results,
                             onLaunchResult = ::launchResult,
                             homeMenu = HomeMenuActions(

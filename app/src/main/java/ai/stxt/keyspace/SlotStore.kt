@@ -17,6 +17,8 @@ class SlotStore(context: Context, name: String) {
 
     fun clear(index: Int) = update(_slots.value.clear(index))
 
+    fun set(slots: AppSlots) = update(slots)
+
     private fun load(): AppSlots = AppSlots(
         prefs.all.mapNotNull { (name, value) ->
             val index = name.removePrefix(PREFIX).toIntOrNull()

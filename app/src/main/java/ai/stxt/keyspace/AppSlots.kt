@@ -18,3 +18,25 @@ data class AppSlots(val cells: Map<Int, String> = emptyMap()) {
         return List(count) { index -> cells[index]?.let(byKey::get) }
     }
 }
+
+/** The two places app shortcuts can be placed. */
+enum class SlotArea { Grid, Dock }
+
+/** One cell: which area, and its index there. */
+data class SlotRef(val area: SlotArea, val index: Int)
+
+/**
+ * Moves the app at [from] to [to] (within an area or between grid and dock). If [to] is occupied the two
+ * swap, so rearranging never deletes a shortcut. Returns the new (grid, dock).
+ */
+fun rearrange(grid: AppSlots, dock: AppSlots, from: SlotRef, to: SlotRef): Pair<AppSlots, AppSlots> {
+    fun cellsOf(area: SlotArea) = if (area == SlotArea.Grid) grid.cells else dock.cells
+    val moving = cellsOf(from.area)[from.index] ?: return grid to dock
+    if (from == to) return grid to dock
+    val displaced = cellsOf(to.area)[to.index]
+    val updated = mutableMapOf(SlotArea.Grid to grid.cells.toMutableMap(), SlotArea.Dock to dock.cells.toMutableMap())
+    updated.getValue(from.area).remove(from.index)
+    updated.getValue(to.area)[to.index] = moving
+    if (displaced != null) updated.getValue(from.area)[from.index] = displaced
+    return AppSlots(updated.getValue(SlotArea.Grid)) to AppSlots(updated.getValue(SlotArea.Dock))
+}

@@ -47,7 +47,10 @@ const val WIDGET_CLIP_LABEL = "widget"
  * started the drag, so drop targets use it to ignore drags from other apps (split-screen, freeform), whose
  * contents can't be trusted.
  */
-object KeyspaceDrag
+class KeyspaceDrag(
+    /** The home cell the dragged app came from; null for drags from the drawer or widget list. */
+    val origin: SlotRef? = null,
+)
 
 /** An installed widget the user can add. Sizes are in dp. */
 class WidgetChoice(
@@ -136,7 +139,7 @@ private fun WidgetRow(choice: WidgetChoice, grid: GridMetrics?, onDragStart: () 
                         onDragStart()
                         DragAndDropTransferData(
                             ClipData(WIDGET_CLIP_LABEL, arrayOf(ClipDescription.MIMETYPE_TEXT_PLAIN), ClipData.Item(choice.provider.flattenToString())),
-                            localState = KeyspaceDrag,
+                            localState = KeyspaceDrag(),
                         )
                     },
             )

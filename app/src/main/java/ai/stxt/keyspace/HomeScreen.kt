@@ -1,6 +1,8 @@
 package ai.stxt.keyspace
 
 import android.content.ClipData
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.CompositionLocalProvider
 import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectDragGestures
 import android.os.Build
@@ -118,8 +120,6 @@ data class DrawerState(val overlay: Overlay = Overlay.None, val dragging: Boolea
     }
 }
 
-/** The two places app shortcuts can be dropped. */
-enum class SlotArea { Grid, Dock }
 
 private val IconSize = 48.dp
 private val GridCellHeight = 96.dp
@@ -137,72 +137,99 @@ fun HomeScreen(
     onDrawerStateChange: (DrawerState) -> Unit,
     onPlace: (area: SlotArea, index: Int, key: String) -> Unit,
     onRemove: (area: SlotArea, index: Int) -> Unit,
+    /** A placed icon was dragged from one cell to another (move, or swap if occupied). */
+    onRearrange: (from: SlotRef, to: SlotRef) -> Unit,
     results: List<AppMatch>?,
     onLaunchResult: (AppEntry) -> Unit,
     homeMenu: HomeMenuActions,
     widgets: WidgetsUi,
     inputArea: @Composable () -> Unit,
 ) {
-    val onDragEnded = { if (drawerState.dragging) onDrawerStateChange(DrawerState.Closed) }
-    Column(
-        Modifier
-            .fillMaxSize()
-            // One scrim behind the results rows, typed line, keyboard and dock, so they read on any wallpaper.
-            .drawBehind {
-                // Ramps up quickly so the typed line and keys are already well covered on light wallpapers.
-                drawRect(
-                    Brush.verticalGradient(
-                        0.40f to Color.Transparent,
-                        0.62f to Color.Black.copy(alpha = 0.45f),
-                        1f to Color.Black.copy(alpha = 0.6f),
+    // The placed icon being dragged, so its cell can dim; null for drawer drags or no drag.
+    var draggingFrom by remember { mutableStateOf<SlotRef?>(null) }
+    val onDragEnded = {
+        draggingFrom = null
+        if (drawerState.dragging) onDrawerStateChange(DrawerState.Closed)
+    }
+    val slotDrag = SlotDrag(
+        from = draggingFrom,
+        onStart = { from ->
+            draggingFrom = from
+            // No panel to hide, but "dragging" shows every drop outline, as for drawer drags.
+            onDrawerStateChange(DrawerState(Overlay.None, dragging = true))
+        },
+        onRearrange = onRearrange,
+    )
+    CompositionLocalProvider(LocalSlotDrag provides slotDrag) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                // One scrim behind the results rows, typed line, keyboard and dock, so they read on any wallpaper.
+                .drawBehind {
+                    // Ramps up quickly so the typed line and keys are already well covered on light wallpapers.
+                    drawRect(
+                        Brush.verticalGradient(
+                            0.40f to Color.Transparent,
+                            0.62f to Color.Black.copy(alpha = 0.45f),
+                            1f to Color.Black.copy(alpha = 0.6f),
+                        )
                     )
+                }
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            // Home area: the shortcut grid, with the drawer opening over it.
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                HomeGrid(
+                    slots = grid,
+                    apps = apps,
+                    columns = gridColumns,
+                    dragging = drawerState.dragging,
+                    repository = repository,
+                    onPlace = { index, key -> onPlace(SlotArea.Grid, index, key) },
+                    onRemove = { index -> onRemove(SlotArea.Grid, index) },
+                    onDragEnded = onDragEnded,
+                    // A drag needs the grid's drop targets, so it takes priority over search results.
+                    results = results.takeIf { !drawerState.dragging },
+                    onLaunchResult = onLaunchResult,
+                    homeMenu = homeMenu,
+                    widgets = widgets,
                 )
+                DrawerOverlay(apps, drawerState, repository, onDrawerStateChange)
+                PanelOverlay(visible = drawerState.overlay == Overlay.Widgets, dragging = drawerState.dragging) { modifier ->
+                    WidgetPicker(
+                        choices = widgets.choices,
+                        grid = widgets.metrics,
+                        onDragStart = { onDrawerStateChange(DrawerState(Overlay.Widgets, dragging = true)) },
+                        modifier = modifier,
+                    )
+                }
             }
-            .statusBarsPadding()
-            .navigationBarsPadding()
-    ) {
-        // Home area: the shortcut grid, with the drawer opening over it.
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            HomeGrid(
-                slots = grid,
-                apps = apps,
-                columns = gridColumns,
+            // Always shown between the home area and the dock.
+            inputArea()
+            DockBar(
+                slots = dock.resolve(apps, DockSize),
                 dragging = drawerState.dragging,
                 repository = repository,
-                onPlace = { index, key -> onPlace(SlotArea.Grid, index, key) },
-                onRemove = { index -> onRemove(SlotArea.Grid, index) },
+                onDrawerToggle = {
+                    onDrawerStateChange(if (drawerState.overlay == Overlay.None) DrawerState(Overlay.Apps) else DrawerState.Closed)
+                },
+                onPlace = { index, key -> onPlace(SlotArea.Dock, index, key) },
+                onRemove = { index -> onRemove(SlotArea.Dock, index) },
                 onDragEnded = onDragEnded,
-                // A drag needs the grid's drop targets, so it takes priority over search results.
-                results = results.takeIf { !drawerState.dragging },
-                onLaunchResult = onLaunchResult,
-                homeMenu = homeMenu,
-                widgets = widgets,
             )
-            DrawerOverlay(apps, drawerState, repository, onDrawerStateChange)
-            PanelOverlay(visible = drawerState.overlay == Overlay.Widgets, dragging = drawerState.dragging) { modifier ->
-                WidgetPicker(
-                    choices = widgets.choices,
-                    grid = widgets.metrics,
-                    onDragStart = { onDrawerStateChange(DrawerState(Overlay.Widgets, dragging = true)) },
-                    modifier = modifier,
-                )
-            }
         }
-        // Always shown between the home area and the dock.
-        inputArea()
-        DockBar(
-            slots = dock.resolve(apps, DockSize),
-            dragging = drawerState.dragging,
-            repository = repository,
-            onDrawerToggle = {
-                onDrawerStateChange(if (drawerState.overlay == Overlay.None) DrawerState(Overlay.Apps) else DrawerState.Closed)
-            },
-            onPlace = { index, key -> onPlace(SlotArea.Dock, index, key) },
-            onRemove = { index -> onRemove(SlotArea.Dock, index) },
-            onDragEnded = onDragEnded,
-        )
     }
 }
+
+/** Dragging placed icons around the grid and dock. */
+class SlotDrag(
+    val from: SlotRef?,
+    val onStart: (SlotRef) -> Unit,
+    val onRearrange: (from: SlotRef, to: SlotRef) -> Unit,
+)
+
+private val LocalSlotDrag = staticCompositionLocalOf<SlotDrag?> { null }
 
 /**
  * [columns] across; as many rows as fit the available height. Cells are numbered row by row.
@@ -253,6 +280,7 @@ private fun HomeGrid(
             for (col in 0 until columns) {
                 val index = row * columns + col
                 AppSlot(
+                    area = SlotArea.Grid,
                     index = index,
                     // Cells under a widget hide their app (kept in storage) and refuse app drops.
                     app = cells[index].takeIf { index !in coveredCells },
@@ -458,7 +486,7 @@ private fun AppDrawer(
                 AppIcon(
                     app = app,
                     repository = repository,
-                    modifier = Modifier.drawerAppGestures(
+                    modifier = Modifier.appIconGestures(
                         app = app,
                         icon = { repository.loadIcon(app).bitmap },
                         onTap = { onLaunch(app) },
@@ -498,6 +526,7 @@ private fun DockBar(
                 }
             }
             AppSlot(
+                area = SlotArea.Dock,
                 index = index,
                 app = app,
                 description = "Dock slot ${index + 1}",
@@ -518,6 +547,7 @@ private fun DockBar(
 /** One drop target cell: shows an app (tap launches, long-press offers Remove) or an empty outline. */
 @Composable
 private fun AppSlot(
+    area: SlotArea,
     index: Int,
     app: AppEntry?,
     description: String,
@@ -543,7 +573,10 @@ private fun AppSlot(
     val currentOnDragEnded by rememberUpdatedState(onDragEnded)
     val currentAcceptsApps by rememberUpdatedState(acceptsApps)
     val currentOnWidgetDrop by rememberUpdatedState(onWidgetDrop)
-    val target = remember(index) {
+    val slotDrag = LocalSlotDrag.current
+    val currentSlotDrag by rememberUpdatedState(slotDrag)
+    val here = SlotRef(area, index)
+    val target = remember(here) {
         object : DragAndDropTarget {
             override fun onEntered(event: DragAndDropEvent) { highlighted = true }
             override fun onExited(event: DragAndDropEvent) { highlighted = false }
@@ -556,7 +589,10 @@ private fun AppSlot(
                 val text = dragEvent.clipData?.getItemAt(0)?.text?.toString() ?: return false
                 if (dragEvent.clipDescription?.label == WIDGET_CLIP_LABEL) return currentOnWidgetDrop?.invoke(text) ?: false
                 if (!currentAcceptsApps) return false
-                currentOnPlace(index, text)
+                // A placed icon being moved: move or swap. From the drawer: place (replacing what's there).
+                val origin = (dragEvent.localState as? KeyspaceDrag)?.origin
+                if (origin != null) currentSlotDrag?.onRearrange?.invoke(origin, here) ?: return false
+                else currentOnPlace(index, text)
                 return true
             }
         }
@@ -569,7 +605,7 @@ private fun AppSlot(
                     val dragEvent = event.toAndroidDragEvent()
                     val isWidget = dragEvent.clipDescription?.label == WIDGET_CLIP_LABEL
                     // Only Keyspace's own drags: other apps can't supply this marker (see KeyspaceDrag).
-                    dragEvent.localState === KeyspaceDrag &&
+                    dragEvent.localState is KeyspaceDrag &&
                         event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN) &&
                         (!isWidget || onWidgetDrop != null)
                 },
@@ -588,18 +624,29 @@ private fun AppSlot(
         if (app == null) {
             if (showEmptyOutline || highlighted) EmptyIcon(ring, showLabel)
         } else {
+            val view = LocalView.current
             Box {
                 AppIcon(
                     app = app,
                     repository = repository,
                     showLabel = showLabel,
                     modifier = Modifier
+                        // The icon being dragged stays in place, dimmed, until it's dropped.
+                        .alpha(if (slotDrag?.from == here) 0.3f else 1f)
                         .then(if (highlighted) Modifier.border(2.dp, ring, highlightShape) else Modifier)
                         .then(
                             if (interactive) {
-                                Modifier.combinedClickable(
-                                    onClick = { repository.launch(app) },
-                                    onLongClick = { menuOpen = true },
+                                Modifier.appIconGestures(
+                                    app = app,
+                                    icon = { repository.loadIcon(app).bitmap },
+                                    onTap = { repository.launch(app) },
+                                    onLongPress = { menuOpen = true },
+                                    onDragStart = {
+                                        menuOpen = false
+                                        slotDrag?.onStart?.invoke(here)
+                                    },
+                                    view = view,
+                                    origin = here,
                                 )
                             } else {
                                 Modifier

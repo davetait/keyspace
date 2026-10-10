@@ -88,21 +88,26 @@ fun AppActionsMenu(app: AppEntry, expanded: Boolean, onDismiss: () -> Unit, onRe
 }
 
 /**
- * Drawer gestures, matching the Pixel launcher: tap launches; long-press opens the app menu; keep holding
- * and move, and the menu closes and the app is dragged (to the grid or dock). Movement before the
- * long-press is left alone so the drawer can scroll.
+ * App icon gestures, matching the Pixel launcher: tap launches; long-press opens the app menu; keep holding
+ * and move, and the menu closes and the app is dragged. Used in the drawer ([origin] null: the drop adds a
+ * shortcut) and on placed icons ([origin] = their cell: the drop moves or swaps them). Movement before
+ * the long-press is left alone so the drawer can scroll.
  */
-fun Modifier.drawerAppGestures(
+fun Modifier.appIconGestures(
     app: AppEntry,
     icon: () -> Bitmap,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
     onDragStart: () -> Unit,
     view: View,
+    origin: SlotRef? = null,
 ): Modifier = this
-    .pointerInput(app.key) {
+    .pointerInput(app.key, origin) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
+            // Placed icons claim the touch, so the home screen's own long-press menu doesn't open behind
+            // them. Drawer icons ([origin] null) leave it unclaimed so the drawer can still scroll.
+            if (origin != null) down.consume()
             val slop = viewConfiguration.touchSlop
             var moved = 0f
             // Phase 1: tap, scroll, or long-press? True: lifted; false: moved (a scroll); null: timed out (a long-press).
@@ -136,7 +141,7 @@ fun Modifier.drawerAppGestures(
                         if (!change.pressed) break
                         if ((change.position - start).getDistance() > slop) {
                             onDragStart()
-                            startAppDrag(view, app, icon())
+                            startAppDrag(view, app, icon(), origin)
                             break
                         }
                     }
@@ -150,7 +155,7 @@ fun Modifier.drawerAppGestures(
     }
 
 /** Starts the same drag the drop targets accept (see [KeyspaceDrag]), with the icon as the drag image. */
-private fun startAppDrag(view: View, app: AppEntry, icon: Bitmap) {
+private fun startAppDrag(view: View, app: AppEntry, icon: Bitmap, origin: SlotRef?) {
     val sizePx = (56 * view.resources.displayMetrics.density).toInt()
     val shadow = object : View.DragShadowBuilder(view) {
         override fun onProvideShadowMetrics(outShadowSize: Point, outShadowTouchPoint: Point) {
@@ -162,5 +167,5 @@ private fun startAppDrag(view: View, app: AppEntry, icon: Bitmap) {
             canvas.drawBitmap(icon, null, Rect(0, 0, sizePx, sizePx), null)
         }
     }
-    view.startDragAndDrop(ClipData.newPlainText("app", app.key), shadow, KeyspaceDrag, 0)
+    view.startDragAndDrop(ClipData.newPlainText("app", app.key), shadow, KeyspaceDrag(origin), 0)
 }
