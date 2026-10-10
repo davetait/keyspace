@@ -33,7 +33,12 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signed with the debug key for now, so a release build installs over a debug one (same signature,
+            // no uninstall, settings kept). Replace with a real release key before sharing it widely or
+            // publishing to Google Play.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

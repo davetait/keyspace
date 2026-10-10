@@ -1,49 +1,19 @@
 package ai.stxt.keyspace
 
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.layout
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.keyframes
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.runtime.CompositionLocalProvider
-import kotlin.math.roundToInt
-import androidx.compose.foundation.gestures.detectDragGestures
-import android.os.Build
-import android.appwidget.AppWidgetProviderInfo
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.Animatable
-import android.provider.Settings
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.runtime.key
-import androidx.compose.runtime.LaunchedEffect
-import android.view.View
 import android.appwidget.AppWidgetManager
-import androidx.compose.ui.unit.round
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.gestures.detectTapGestures
+import android.appwidget.AppWidgetProviderInfo
+import android.content.Context
+import android.os.Build
+import android.provider.Settings
+import android.view.View
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -54,18 +24,21 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -77,26 +50,57 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.round
+import androidx.compose.ui.viewinterop.AndroidView
+import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Which panel covers the home area. */
 enum class Overlay { None, Apps, Widgets }
@@ -447,7 +451,7 @@ private fun ResultCell(
                             onHeldChange = { held = it },
                         ),
                 )
-                AppActionsMenu(match.app, expanded = menuOpen, onDismiss = { menuOpen = false }, showDragHint = true)
+                if (menuOpen) AppActionsMenu(match.app, expanded = true, onDismiss = { menuOpen = false }, showDragHint = true)
             }
         }
     }
@@ -505,7 +509,7 @@ private fun AppDrawer(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        items(apps, key = { it.key }) { app ->
+        items(apps, key = { it.key }, contentType = { "app" }) { app ->
             var menuOpen by remember { mutableStateOf(false) }
             var held by remember { mutableStateOf(false) }
             val view = LocalView.current
@@ -527,7 +531,7 @@ private fun AppDrawer(
                         onHeldChange = { held = it },
                     ),
                 )
-                AppActionsMenu(app, expanded = menuOpen, onDismiss = { menuOpen = false }, showDragHint = true)
+                if (menuOpen) AppActionsMenu(app, expanded = true, onDismiss = { menuOpen = false }, showDragHint = true)
             }
         }
     }
@@ -670,9 +674,9 @@ private fun AppSlot(
                             }
                         ),
                 )
-                AppActionsMenu(
+                if (menuOpen) AppActionsMenu(
                     app,
-                    expanded = menuOpen,
+                    expanded = true,
                     onDismiss = { menuOpen = false },
                     onRemove = { onRemove(index) },
                     showDragHint = true,
@@ -724,10 +728,16 @@ private fun AppIcon(
 ) {
     // Adaptive icons already come masked to the system shape, and icon pack icons have their own. Legacy
     // icons have neither, so they get a round plate at 72% scale: every icon then has a consistent outline.
-    val loaded = remember(app.key, LocalIconStyle.current) { repository.loadIcon(app) }
+    // Normally already rendered by the background prefetch. If not, render it off the main thread and show an
+    // empty space of the same size meanwhile, so scrolling never waits for an icon.
+    val style = LocalIconStyle.current
+    val cached = remember(app.key, style) { repository.cachedIcon(app) }
+    val loaded = cached ?: produceState<LoadedIcon?>(null, app.key, style) {
+        value = withContext(Dispatchers.Default) { repository.loadIcon(app) }
+    }.value
     val hasDot = LocalNotificationDots.current?.contains(app.dotKey) == true
-    val icon = remember(loaded) { loaded.bitmap.asImageBitmap() }
-    val legacy = loaded.needsPlate
+    val legacy = loaded?.needsPlate == true
+    val fromPack = loaded?.fromPack == true
     val plate = KeyspaceColors.iconPlate
     val accent = KeyspaceColors.accent
     val label = remember(app.label, highlight) {
@@ -744,13 +754,13 @@ private fun AppIcon(
         Box {
             Box(
                 modifier = Modifier
-                    .liftOnHold(held, rounded = loaded.fromPack)
+                    .liftOnHold(held, rounded = fromPack)
                     .size(IconSize)
-                    .then(if (ring) Modifier.outlineRing(accent, rounded = loaded.fromPack) else Modifier)
+                    .then(if (ring) Modifier.outlineRing(accent, rounded = fromPack) else Modifier)
                     .then(if (legacy) Modifier.clip(CircleShape).background(plate) else Modifier),
                 contentAlignment = Alignment.Center,
             ) {
-                Image(bitmap = icon, contentDescription = null, modifier = Modifier.fillMaxSize(if (legacy) 0.72f else 1f))
+                loaded?.let { Image(bitmap = it.image, contentDescription = null, modifier = Modifier.fillMaxSize(if (legacy) 0.72f else 1f)) }
             }
             if (hasDot) NotificationDot(Modifier.align(Alignment.TopEnd))
         }
@@ -783,14 +793,14 @@ private fun Modifier.notPlaced(): Modifier = layout { measurable, constraints ->
     layout(0, 0) {}
 }
 
-/** True when "Remove animations" is on in system settings. */
+/** True when "Remove animations" is on in system settings; read once per resume, not per icon. */
+val LocalReduceMotion = compositionLocalOf { false }
+
+fun Context.reduceMotionEnabled(): Boolean =
+    Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+
 @Composable
-private fun rememberReduceMotion(): Boolean {
-    val context = LocalContext.current
-    return remember {
-        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
-    }
-}
+private fun rememberReduceMotion(): Boolean = LocalReduceMotion.current
 
 /**
  * Android's "picked up" cue (as on the Pixel launcher): while [held], the icon grows by [LIFT_SCALE] with a
@@ -805,8 +815,9 @@ private fun Modifier.liftOnHold(held: Boolean, rounded: Boolean): Modifier {
         label = "lift",
     )
     val wiggle = remember { Animatable(0f) }
-    LaunchedEffect(held) {
-        if (held && !reduceMotion) {
+    // Only icons actually being held start the wiggle; resting icons (every drawer cell) do no work here.
+    if (held && !reduceMotion) {
+        LaunchedEffect(Unit) {
             wiggle.animateTo(0f, keyframes {
                 durationMillis = 300
                 6f at 50
@@ -815,10 +826,10 @@ private fun Modifier.liftOnHold(held: Boolean, rounded: Boolean): Modifier {
                 -4f at 250
                 0f at 300
             })
-        } else {
-            wiggle.snapTo(0f)
         }
     }
+    // Resting icons get no extra layer at all.
+    if (!held && lift == 0f) return this
     val elevation = with(LocalDensity.current) { 8.dp.toPx() }
     val shape = if (rounded) KeyspaceTokens.SmallShape else CircleShape
     return graphicsLayer {

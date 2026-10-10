@@ -1,29 +1,26 @@
 package ai.stxt.keyspace
 
 import android.Manifest
-import android.os.Build
-import android.content.ComponentName
-import android.appwidget.AppWidgetProviderInfo
 import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProviderInfo
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
-import android.view.KeyEvent
 import android.provider.Settings
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Column
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.Modifier
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -35,13 +32,19 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -165,8 +168,15 @@ class MainActivity : ComponentActivity() {
                     "$activeIconPack|$themeColors"
                 }
 
+                // Render all icons in the background whenever the app list or icon style changes, so the drawer
+                // never renders one on the main thread while scrolling.
+                LaunchedEffect(apps, iconStyle) {
+                    withContext(Dispatchers.Default) { repository.prefetchIcons(apps) { isActive } }
+                }
+
                 // Refreshed on resume: the user may have just granted (or revoked) access in Android's settings.
                 var hasNotificationAccess by remember { mutableStateOf(NotificationDots.hasAccess(this@MainActivity)) }
+                var reduceMotion by remember { mutableStateOf(reduceMotionEnabled()) }
                 val notifiedApps by NotificationDots.apps.collectAsState()
                 val dots = notifiedApps.takeIf { settings.notificationDots && hasNotificationAccess }
                 val openNotificationAccess = {
@@ -214,6 +224,7 @@ class MainActivity : ComponentActivity() {
                     }
                     isHome = isDefaultHome()
                     hasNotificationAccess = NotificationDots.hasAccess(this@MainActivity)
+                    reduceMotion = reduceMotionEnabled()
                     onPauseOrDispose {
                         scope.cancel()
                         speech.stop()
@@ -313,6 +324,7 @@ class MainActivity : ComponentActivity() {
                 val appActions = remember(repository) { AppActions(repository, onRename = { renaming = it }) }
                 CompositionLocalProvider(
                     LocalIconStyle provides iconStyle,
+                    LocalReduceMotion provides reduceMotion,
                     LocalNotificationDots provides dots,
                     LocalAppActions provides appActions,
                 ) {

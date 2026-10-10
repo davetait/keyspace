@@ -1,5 +1,6 @@
 package ai.stxt.keyspace
 
+import android.app.ActivityManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -10,8 +11,8 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
@@ -22,8 +23,11 @@ import android.os.UserHandle
 import android.os.UserManager
 import android.util.Log
 import android.util.LruCache
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.toBitmap
+import kotlin.math.ceil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -31,7 +35,10 @@ import kotlinx.coroutines.withContext
  * An app icon rendered at a fixed size. [needsPlate]: a legacy icon that gets a round plate.
  * [fromPack]: drawn by an icon pack, so its outline can be any shape (not the system circle).
  */
-class LoadedIcon(val bitmap: Bitmap, val needsPlate: Boolean, val fromPack: Boolean = false)
+class LoadedIcon(val bitmap: Bitmap, val needsPlate: Boolean, val fromPack: Boolean = false) {
+    /** For drawing in Compose; wraps [bitmap] once rather than on every recomposition. */
+    val image: ImageBitmap = bitmap.asImageBitmap()
+}
 
 /**
  * Apps across all of the user's profiles (personal, work, …), via [LauncherApps], the API Android
@@ -85,9 +92,10 @@ class AppRepository(private val context: Context) {
         return { launcherApps.unregisterCallback(callback) }
     }
 
-    private var iconPack: IconPackLoader? = null
+    // Read from the icon prefetch thread as well as the main thread.
+    @Volatile private var iconPack: IconPackLoader? = null
     /** Background and glyph colors for themed icons; null when themed icons are off. */
-    private var themeColors: Pair<Int, Int>? = null
+    @Volatile private var themeColors: Pair<Int, Int>? = null
 
     /** Turns themed icons on (with these wallpaper-derived colors) or off (null). */
     fun setThemedIcons(colors: Pair<Int, Int>?) {
@@ -95,7 +103,27 @@ class AppRepository(private val context: Context) {
         themeColors = colors
         icons.evictAll()
     }
-    private val icons = LruCache<String, LoadedIcon>(ICON_CACHE_SIZE)
+    /** Icons are rendered at the size they're drawn: 48dp, lifted (see LIFT_SCALE). */
+    private val iconPx = ceil(48 * context.resources.displayMetrics.density * LIFT_SCALE).toInt()
+
+    /** Cached icons, limited by memory (1/8 of what the app may use) rather than by count. */
+    private val icons = object : LruCache<String, LoadedIcon>(cacheBytes(context)) {
+        override fun sizeOf(key: String, value: LoadedIcon) = value.bitmap.allocationByteCount
+    }
+
+    /** The icon if it's already rendered; never does any work, so it's safe to call while drawing. */
+    fun cachedIcon(app: AppEntry): LoadedIcon? = icons.get(app.key)
+
+    /**
+     * Renders every app's icon in the background (drawer order), so scrolling never waits for one. Call after the
+     * app list or the icon style changes. Stops early if [isActive] turns false (a newer prefetch replaced it).
+     */
+    fun prefetchIcons(apps: List<AppEntry>, isActive: () -> Boolean = { true }) {
+        for (app in apps) {
+            if (!isActive()) return
+            if (icons.get(app.key) == null) loadIcon(app)
+        }
+    }
 
     /** Switches icon pack (null: system icons). Returns false if the pack couldn't be loaded. */
     fun setIconPack(packageName: String?): Boolean {
@@ -131,7 +159,7 @@ class AppRepository(private val context: Context) {
             themed(original)?.let { render(it, app) }?.let { LoadedIcon(it, needsPlate = false) }
         } ?: LoadedIcon(
             // A blank icon is better than a crash if even the app's own icon can't be drawn.
-            render(original, app) ?: createBitmap(ICON_PX, ICON_PX),
+            render(original, app) ?: createBitmap(iconPx, iconPx),
             needsPlate = original !is AdaptiveIconDrawable,
         )
         icons.put(app.key, loaded)
@@ -146,7 +174,7 @@ class AppRepository(private val context: Context) {
         val (background, glyph) = themeColors ?: return null
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || original !is AdaptiveIconDrawable) return null
         val mono = original.monochrome ?: return null
-        val size = ICON_PX
+        val size = iconPx
         val out = createBitmap(size, size)
         val canvas = Canvas(out)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = background }
@@ -165,7 +193,7 @@ class AppRepository(private val context: Context) {
     /** Renders at the fixed icon size, adding the work badge for other profiles. Null if the drawable fails. */
     private fun render(drawable: Drawable, app: AppEntry): Bitmap? = try {
         val badged = if (app.isOtherProfile) pm.getUserBadgedIcon(drawable, userOf(app)) else drawable
-        badged.toBitmap(ICON_PX, ICON_PX)
+        badged.toBitmap(iconPx, iconPx)
     } catch (e: Exception) {
         Log.w(TAG, "Couldn't render icon for ${app.key}", e)
         null
@@ -206,7 +234,7 @@ class AppRepository(private val context: Context) {
     }
 
     fun shortcutIcon(shortcut: ShortcutInfo): Bitmap? = try {
-        launcherApps.getShortcutIconDrawable(shortcut, context.resources.displayMetrics.densityDpi)?.toBitmap(ICON_PX, ICON_PX)
+        launcherApps.getShortcutIconDrawable(shortcut, context.resources.displayMetrics.densityDpi)?.toBitmap(iconPx, iconPx)
     } catch (e: Exception) {
         null
     }
@@ -252,8 +280,11 @@ class AppRepository(private val context: Context) {
     }
 
     private companion object {
-        const val ICON_CACHE_SIZE = 200
-        const val ICON_PX = 192
+        fun cacheBytes(context: Context): Int {
+            val memoryClassMb = context.getSystemService(ActivityManager::class.java).memoryClass
+            return memoryClassMb * 1024 * 1024 / 8
+        }
+
         const val MAX_SHORTCUTS = 4
         const val TAG = "AppRepository"
     }
