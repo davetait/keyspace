@@ -119,15 +119,16 @@ fun Modifier.appIconGestures(
     onDragStart: () -> Unit,
     view: View,
     origin: SlotRef? = null,
+    fromSearch: Boolean = false,
     /** True while the icon is long-pressed and held (it should look "lifted"); false once released or dragged. */
     onHeldChange: (Boolean) -> Unit = {},
 ): Modifier = this
     .pointerInput(app.key, origin) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
-            // Placed icons claim the touch, so the home screen's own long-press menu doesn't open behind
-            // them. Drawer icons ([origin] null) leave it unclaimed so the drawer can still scroll.
-            if (origin != null) down.consume()
+            // Icons on the home screen (placed or search results) claim the touch, so the home screen's own
+            // long-press menu doesn't open behind them. Drawer icons leave it unclaimed so the drawer can scroll.
+            if (origin != null || fromSearch) down.consume()
             val slop = viewConfiguration.touchSlop
             var moved = 0f
             // Phase 1: tap, scroll, or long-press? True: lifted; false: moved (a scroll); null: timed out (a long-press).
@@ -165,7 +166,14 @@ fun Modifier.appIconGestures(
                                 // The drag image (also lifted) takes over from the icon.
                                 onHeldChange(false)
                                 onDragStart()
-                                startAppDrag(view, app, icon(), origin)
+                                // Let the screen settle first (menu pop-up closed, results swapped for the grid's
+                                // drop targets): starting the drag mid-update made drops randomly go nowhere (about
+                                // 1 in 3 drags on the API 37 emulator). Scheduled on the view, not in this gesture,
+                                // because the update can remove this icon (search results), cancelling the gesture.
+                                // The finger is still down; if it lifts first, Android simply doesn't start the drag.
+                                val marker = KeyspaceDrag(origin, fromSearch)
+                                val image = icon()
+                                view.postDelayed({ startAppDrag(view, app, image, marker) }, DRAG_SETTLE_MILLIS)
                                 break
                             }
                         }
@@ -183,7 +191,7 @@ fun Modifier.appIconGestures(
     }
 
 /** Starts the same drag the drop targets accept (see [KeyspaceDrag]), with the icon as the drag image. */
-private fun startAppDrag(view: View, app: AppEntry, icon: Bitmap, origin: SlotRef?) {
+private fun startAppDrag(view: View, app: AppEntry, icon: Bitmap, marker: KeyspaceDrag) {
     val density = view.resources.displayMetrics.density
     // The icon at its lifted size (48dp × LIFT_SCALE), with room around it for a soft drop shadow.
     val iconPx = (48 * LIFT_SCALE * density).toInt()
@@ -206,8 +214,11 @@ private fun startAppDrag(view: View, app: AppEntry, icon: Bitmap, origin: SlotRe
             canvas.drawBitmap(icon, null, Rect(pad, pad, pad + iconPx, pad + iconPx), null)
         }
     }
-    view.startDragAndDrop(ClipData.newPlainText("app", app.key), shadow, KeyspaceDrag(origin), 0)
+    view.startDragAndDrop(ClipData.newPlainText("app", app.key), shadow, marker, 0)
 }
+
+/** How long a drag waits for the screen to settle before starting (see appIconGestures). */
+private const val DRAG_SETTLE_MILLIS = 80L
 
 /** How much a long-pressed icon grows to show it's picked up (as on the Pixel launcher). */
 const val LIFT_SCALE = 1.12f

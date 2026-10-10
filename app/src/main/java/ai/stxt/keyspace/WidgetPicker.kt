@@ -48,8 +48,10 @@ const val WIDGET_CLIP_LABEL = "widget"
  * contents can't be trusted.
  */
 class KeyspaceDrag(
-    /** The home cell the dragged app came from; null for drags from the drawer or widget list. */
+    /** The home cell the dragged app came from; null for drags from the drawer, search or widget list. */
     val origin: SlotRef? = null,
+    /** Dragged out of the search results (a successful drop then ends the search). */
+    val fromSearch: Boolean = false,
 )
 
 /** An installed widget the user can add. Sizes are in dp. */

@@ -1,6 +1,9 @@
 package ai.stxt.keyspace
 
-import android.content.ClipData
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.snap
@@ -40,7 +43,6 @@ import androidx.compose.ui.unit.round
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.gestures.detectTapGestures
-import android.content.ClipDescription
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -52,11 +54,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.draganddrop.dragAndDropSource
-import androidx.compose.foundation.draganddrop.dragAndDropTarget
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -76,7 +73,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -84,22 +80,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draganddrop.DragAndDropEvent
-import androidx.compose.ui.draganddrop.DragAndDropTarget
-import androidx.compose.ui.draganddrop.DragAndDropTransferData
-import androidx.compose.ui.draganddrop.mimeTypes
-import androidx.compose.ui.draganddrop.toAndroidDragEvent
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -108,7 +97,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.graphics.drawable.toBitmap
 
 /** Which panel covers the home area. */
 enum class Overlay { None, Apps, Widgets }
@@ -144,6 +132,8 @@ fun HomeScreen(
     onRemove: (area: SlotArea, index: Int) -> Unit,
     /** A placed icon was dragged from one cell to another (move, or swap if occupied). */
     onRearrange: (from: SlotRef, to: SlotRef) -> Unit,
+    /** An app dragged out of the search results was placed on the home screen or dock. */
+    onSearchItemPlaced: () -> Unit,
     results: List<AppMatch>?,
     onLaunchResult: (AppEntry) -> Unit,
     homeMenu: HomeMenuActions,
@@ -164,8 +154,19 @@ fun HomeScreen(
             onDrawerStateChange(DrawerState(Overlay.None, dragging = true))
         },
         onRearrange = onRearrange,
+        // Hides the results (dragging takes priority) and shows every drop outline.
+        onSearchDragStart = { onDrawerStateChange(DrawerState(Overlay.None, dragging = true)) },
+        onSearchItemPlaced = onSearchItemPlaced,
     )
-    CompositionLocalProvider(LocalSlotDrag provides slotDrag) {
+    // All drags over the home screen go through one handler on the host view (see DropTargets).
+    val dropTargets = remember { DropTargets() }
+    dropTargets.onDragEnded = onDragEnded
+    val hostView = LocalView.current
+    DisposableEffect(hostView) {
+        hostView.setOnDragListener(dropTargets.listener)
+        onDispose { hostView.setOnDragListener(null) }
+    }
+    CompositionLocalProvider(LocalSlotDrag provides slotDrag, LocalDropTargets provides dropTargets) {
         Column(
             Modifier
                 .fillMaxSize()
@@ -193,9 +194,8 @@ fun HomeScreen(
                     repository = repository,
                     onPlace = { index, key -> onPlace(SlotArea.Grid, index, key) },
                     onRemove = { index -> onRemove(SlotArea.Grid, index) },
-                    onDragEnded = onDragEnded,
-                    // A drag needs the grid's drop targets, so it takes priority over search results.
-                    results = results.takeIf { !drawerState.dragging },
+                    results = results,
+                    resultsSuspended = drawerState.dragging,
                     onLaunchResult = onLaunchResult,
                     homeMenu = homeMenu,
                     widgets = widgets,
@@ -221,17 +221,18 @@ fun HomeScreen(
                 },
                 onPlace = { index, key -> onPlace(SlotArea.Dock, index, key) },
                 onRemove = { index -> onRemove(SlotArea.Dock, index) },
-                onDragEnded = onDragEnded,
             )
         }
     }
 }
 
-/** Dragging placed icons around the grid and dock. */
+/** Dragging placed icons around the grid and dock, and apps out of the search results. */
 class SlotDrag(
     val from: SlotRef?,
     val onStart: (SlotRef) -> Unit,
     val onRearrange: (from: SlotRef, to: SlotRef) -> Unit,
+    val onSearchDragStart: () -> Unit,
+    val onSearchItemPlaced: () -> Unit,
 )
 
 private val LocalSlotDrag = staticCompositionLocalOf<SlotDrag?> { null }
@@ -250,8 +251,14 @@ private fun HomeGrid(
     repository: AppRepository,
     onPlace: (index: Int, key: String) -> Unit,
     onRemove: (index: Int) -> Unit,
-    onDragEnded: () -> Unit,
     results: List<AppMatch>?,
+    /**
+     * A drag is in progress, so the grid's drop targets take priority over the results. The results must stay
+     * composed, since one may be the drag's source and removing it as the drag starts makes the grid ignore
+     * the drag, but must not be placed on screen, where they would catch the drag instead of the cells
+     * under them. Both seen on the API 37 emulator.
+     */
+    resultsSuspended: Boolean,
     onLaunchResult: (AppEntry) -> Unit,
     homeMenu: HomeMenuActions,
     widgets: WidgetsUi,
@@ -274,7 +281,7 @@ private fun HomeGrid(
 
         val cells = slots.resolve(apps, rows * columns)
         val resultRows = results?.let { bottomUpRows(it, columns, minOf(ResultRows, rows)) }
-        val searching = resultRows != null
+        val searching = resultRows != null && !resultsSuspended
         val shownWidgets = visibleWidgets(widgets.placed, columns, rows)
         val coveredCells = shownWidgets.flatMap { it.cells(columns) }.toSet()
 
@@ -299,7 +306,6 @@ private fun HomeGrid(
                     repository = repository,
                     onPlace = onPlace,
                     onRemove = onRemove,
-                    onDragEnded = onDragEnded,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
             }
@@ -337,7 +343,7 @@ private fun HomeGrid(
         }
         if (resultRows != null) {
             // Same row layout as the grid; only the bottom rows get results, right above the keyboard.
-            GridRows(rows) { row ->
+            GridRows(rows, if (resultsSuspended) Modifier.notPlaced() else Modifier) { row ->
                 resultRows.getOrNull(row - (rows - resultRows.size))?.forEach { match ->
                     ResultCell(match, isTop = match != null && match == results.firstOrNull(), repository, onLaunchResult, Modifier.weight(1f).fillMaxHeight())
                 }
@@ -410,20 +416,38 @@ private fun ResultCell(
             LaunchedEffect(match.app.key) { appear.animateTo(1f, tween(durationMillis = 160)) }
             val rise = with(LocalDensity.current) { 6.dp.toPx() }
             var menuOpen by remember { mutableStateOf(false) }
+            var held by remember { mutableStateOf(false) }
+            val view = LocalView.current
+            val slotDrag = LocalSlotDrag.current
             Box {
                 AppIcon(
                     app = match.app,
                     repository = repository,
                     highlight = match.matchedIndices,
                     ring = isTop,
+                    held = held,
                     modifier = Modifier
                         .graphicsLayer {
                             alpha = appear.value
                             translationY = (1f - appear.value) * rise
                         }
-                        .combinedClickable(onClick = { onLaunch(match.app) }, onLongClick = { menuOpen = true }),
+                        // Same gestures as the drawer: tap launches, long-press opens the menu, move to drag
+                        // the app onto the home screen or dock.
+                        .appIconGestures(
+                            app = match.app,
+                            icon = { repository.loadIcon(match.app).bitmap },
+                            onTap = { onLaunch(match.app) },
+                            onLongPress = { menuOpen = true },
+                            onDragStart = {
+                                menuOpen = false
+                                slotDrag?.onSearchDragStart?.invoke()
+                            },
+                            view = view,
+                            fromSearch = true,
+                            onHeldChange = { held = it },
+                        ),
                 )
-                AppActionsMenu(match.app, expanded = menuOpen, onDismiss = { menuOpen = false })
+                AppActionsMenu(match.app, expanded = menuOpen, onDismiss = { menuOpen = false }, showDragHint = true)
             }
         }
     }
@@ -517,7 +541,6 @@ private fun DockBar(
     onDrawerToggle: () -> Unit,
     onPlace: (index: Int, key: String) -> Unit,
     onRemove: (index: Int) -> Unit,
-    onDragEnded: () -> Unit,
 ) {
     val half = slots.size / 2
     Row(
@@ -542,7 +565,6 @@ private fun DockBar(
                 repository = repository,
                 onPlace = onPlace,
                 onRemove = onRemove,
-                onDragEnded = onDragEnded,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -561,7 +583,6 @@ private fun AppSlot(
     repository: AppRepository,
     onPlace: (index: Int, key: String) -> Unit,
     onRemove: (index: Int) -> Unit,
-    onDragEnded: () -> Unit,
     modifier: Modifier,
     emphasizeOutline: Boolean = false,
     /** False while hidden behind search results: stays a drop target but ignores taps. */
@@ -571,51 +592,39 @@ private fun AppSlot(
     /** Handles a widget dropped with its top-left on this cell; null where widgets can't go (the dock). */
     onWidgetDrop: ((provider: String) -> Boolean)? = null,
 ) {
-    var highlighted by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
-    // The target object is remembered, so read the latest callbacks rather than the first ones captured.
-    val currentOnPlace by rememberUpdatedState(onPlace)
-    val currentOnDragEnded by rememberUpdatedState(onDragEnded)
-    val currentAcceptsApps by rememberUpdatedState(acceptsApps)
-    val currentOnWidgetDrop by rememberUpdatedState(onWidgetDrop)
     val slotDrag = LocalSlotDrag.current
-    val currentSlotDrag by rememberUpdatedState(slotDrag)
     val here = SlotRef(area, index)
-    val target = remember(here) {
-        object : DragAndDropTarget {
-            override fun onEntered(event: DragAndDropEvent) { highlighted = true }
-            override fun onExited(event: DragAndDropEvent) { highlighted = false }
-            override fun onEnded(event: DragAndDropEvent) {
-                highlighted = false
-                currentOnDragEnded()
+    val dropTargets = LocalDropTargets.current
+    val highlighted = dropTargets?.hovered == here
+    // Registered with the home screen's drag handler (see DropTargets); updated every composition so the
+    // drop rules always use the latest state.
+    val dropTarget = remember(here) { DropTarget() }
+    dropTarget.onDrop = { text, isWidget, marker ->
+        when {
+            isWidget -> onWidgetDrop?.invoke(text) ?: false
+            !acceptsApps -> false
+            // A placed icon being moved: move or swap.
+            marker.origin != null -> {
+                slotDrag?.onRearrange?.invoke(marker.origin, here)
+                slotDrag != null
             }
-            override fun onDrop(event: DragAndDropEvent): Boolean {
-                val dragEvent = event.toAndroidDragEvent()
-                val text = dragEvent.clipData?.getItemAt(0)?.text?.toString() ?: return false
-                if (dragEvent.clipDescription?.label == WIDGET_CLIP_LABEL) return currentOnWidgetDrop?.invoke(text) ?: false
-                if (!currentAcceptsApps) return false
-                // A placed icon being moved: move or swap. From the drawer: place (replacing what's there).
-                val origin = (dragEvent.localState as? KeyspaceDrag)?.origin
-                if (origin != null) currentSlotDrag?.onRearrange?.invoke(origin, here) ?: return false
-                else currentOnPlace(index, text)
-                return true
+            // From the drawer or search: place (replacing what's there).
+            else -> {
+                onPlace(index, text)
+                if (marker.fromSearch) slotDrag?.onSearchItemPlaced?.invoke()
+                true
             }
         }
+    }
+    DisposableEffect(dropTargets, here) {
+        dropTargets?.register(here, dropTarget)
+        onDispose { dropTargets?.unregister(here, dropTarget) }
     }
 
     Box(
         modifier = modifier
-            .dragAndDropTarget(
-                shouldStartDragAndDrop = { event ->
-                    val dragEvent = event.toAndroidDragEvent()
-                    val isWidget = dragEvent.clipDescription?.label == WIDGET_CLIP_LABEL
-                    // Only Keyspace's own drags: other apps can't supply this marker (see KeyspaceDrag).
-                    dragEvent.localState is KeyspaceDrag &&
-                        event.mimeTypes().contains(ClipDescription.MIMETYPE_TEXT_PLAIN) &&
-                        (!isWidget || onWidgetDrop != null)
-                },
-                target = target,
-            )
+            .onGloballyPositioned { dropTarget.bounds = it.boundsInRoot() }
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
@@ -766,6 +775,12 @@ private fun Modifier.outlineRing(color: Color, rounded: Boolean): Modifier = dra
     } else {
         drawOval(color, topLeft, ringSize, style = Stroke(stroke))
     }
+}
+
+/** Measured but never placed: stays in the composition, but isn't drawn and can't receive touches or drags. */
+private fun Modifier.notPlaced(): Modifier = layout { measurable, constraints ->
+    measurable.measure(constraints)
+    layout(0, 0) {}
 }
 
 /** True when "Remove animations" is on in system settings. */
