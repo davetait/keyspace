@@ -13,6 +13,9 @@ enum class AdaptSpeed(val halfLifeDays: Double, val description: String) {
     Slow(7.0, "New favorites rise in about a week"),
 }
 
+/** The cursor after the typed text. Invisible by default: a blinking cursor is distracting on a home screen. */
+enum class CursorStyle { Blinking, Solid, Invisible }
+
 data class KeyspaceSettings(
     val columns: Int = DEFAULT_COLUMNS,
     val adaptSpeed: AdaptSpeed = AdaptSpeed.Normal,
@@ -22,6 +25,7 @@ data class KeyspaceSettings(
     val notificationDots: Boolean = false,
     /** Android 13+ monochrome icons, tinted to the wallpaper colors. */
     val themedIcons: Boolean = false,
+    val cursorStyle: CursorStyle = CursorStyle.Invisible,
 ) {
     companion object {
         const val DEFAULT_COLUMNS = 5
@@ -34,12 +38,14 @@ data class KeyspaceSettings(
             iconPack: String? = null,
             notificationDots: Boolean = false,
             themedIcons: Boolean = false,
+            cursorStyle: String? = null,
         ) = KeyspaceSettings(
             columns = columns?.coerceIn(COLUMN_RANGE) ?: DEFAULT_COLUMNS,
             adaptSpeed = AdaptSpeed.entries.firstOrNull { it.name == adaptSpeed } ?: AdaptSpeed.Normal,
             iconPack = iconPack?.takeIf { it.isNotBlank() },
             notificationDots = notificationDots,
             themedIcons = themedIcons,
+            cursorStyle = CursorStyle.entries.firstOrNull { it.name == cursorStyle } ?: CursorStyle.Invisible,
         )
     }
 }
@@ -54,6 +60,7 @@ class SettingsStore(context: Context) {
             iconPack = prefs.getString(ICON_PACK, null),
             notificationDots = prefs.getBoolean(NOTIFICATION_DOTS, false),
             themedIcons = prefs.getBoolean(THEMED_ICONS, false),
+            cursorStyle = prefs.getString(CURSOR_STYLE, null),
         )
     )
     val settings: StateFlow<KeyspaceSettings> = _settings.asStateFlow()
@@ -77,6 +84,8 @@ class SettingsStore(context: Context) {
 
     fun setThemedIcons(on: Boolean) = update(_settings.value.copy(themedIcons = on))
 
+    fun setCursorStyle(style: CursorStyle) = update(_settings.value.copy(cursorStyle = style))
+
     private fun update(settings: KeyspaceSettings) {
         _settings.value = settings
         prefs.edit {
@@ -85,6 +94,7 @@ class SettingsStore(context: Context) {
             if (settings.iconPack == null) remove(ICON_PACK) else putString(ICON_PACK, settings.iconPack)
             putBoolean(NOTIFICATION_DOTS, settings.notificationDots)
             putBoolean(THEMED_ICONS, settings.themedIcons)
+            putString(CURSOR_STYLE, settings.cursorStyle.name)
         }
     }
 
@@ -95,5 +105,6 @@ class SettingsStore(context: Context) {
         const val WELCOME_DISMISSED = "welcome_dismissed"
         const val NOTIFICATION_DOTS = "notification_dots"
         const val THEMED_ICONS = "themed_icons"
+        const val CURSOR_STYLE = "cursor_style"
     }
 }

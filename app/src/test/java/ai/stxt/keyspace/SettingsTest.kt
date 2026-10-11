@@ -27,4 +27,12 @@ class SettingsTest {
         assertEquals(null, KeyspaceSettings.parse(5, "Normal", " ").iconPack)
         assertEquals(null, KeyspaceSettings.parse(null, null).iconPack)
     }
+
+    @Test
+    fun `cursor is invisible unless a known style is stored`() {
+        assertEquals(CursorStyle.Invisible, KeyspaceSettings.parse(null, null).cursorStyle)
+        assertEquals(CursorStyle.Solid, KeyspaceSettings.parse(5, "Normal", cursorStyle = "Solid").cursorStyle)
+        assertEquals(CursorStyle.Blinking, KeyspaceSettings.parse(5, "Normal", cursorStyle = "Blinking").cursorStyle)
+        assertEquals(CursorStyle.Invisible, KeyspaceSettings.parse(5, "Normal", cursorStyle = "Flashing").cursorStyle)
+    }
 }

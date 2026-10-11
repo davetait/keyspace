@@ -34,7 +34,7 @@ import kotlinx.coroutines.delay
 private val LineShadow = Shadow(Color.Black.copy(alpha = 0.6f), Offset(0f, 1f), blurRadius = 4f)
 
 /**
- * Shows what has been typed, with a blinking cursor. Plain text (not a TextField) so the system
+ * Shows what has been typed, followed by a cursor in [cursorStyle]. Plain text (not a TextField) so the system
  * keyboard can never open. Left-aligned with the keyboard so the eye runs from the text to the keys
  * and to the best result.
  *
@@ -43,12 +43,20 @@ private val LineShadow = Shadow(Color.Black.copy(alpha = 0.6f), Offset(0f, 1f), 
  * - [noMatches]: says so beside the text instead of leaving an unexplained empty space.
  */
 @Composable
-fun TypedLine(text: String, status: String?, noMatches: Boolean, modifier: Modifier = Modifier) {
+fun TypedLine(
+    text: String,
+    status: String?,
+    noMatches: Boolean,
+    cursorStyle: CursorStyle,
+    modifier: Modifier = Modifier,
+) {
     // A plain on/off blink (as in text fields), not a fade: a fade redraws the whole screen every frame, forever,
     // costing battery and competing with scrolling; this redraws twice a second. Solid while typing.
+    // Solid and Invisible run no timer at all, so an idle home screen doesn't redraw.
     var cursorOn by remember { mutableStateOf(true) }
-    LaunchedEffect(text) {
-        cursorOn = true
+    LaunchedEffect(text, cursorStyle) {
+        cursorOn = cursorStyle != CursorStyle.Invisible
+        if (cursorStyle != CursorStyle.Blinking) return@LaunchedEffect
         while (true) {
             delay(CURSOR_BLINK_MILLIS)
             cursorOn = !cursorOn
@@ -82,6 +90,7 @@ fun TypedLine(text: String, status: String?, noMatches: Boolean, modifier: Modif
             else -> {
                 // Long text keeps its end visible, where typing happens.
                 Text(text, style = lineStyle, maxLines = 1, overflow = TextOverflow.StartEllipsis, modifier = Modifier.weight(1f, fill = false))
+                // Kept in the layout even when invisible, so the text doesn't shift when the style changes.
                 Box(Modifier.padding(horizontal = 2.dp).width(2.dp).height(32.dp).graphicsLayer { alpha = if (cursorOn) 1f else 0f }.background(textColor))
                 if (text.isEmpty()) {
                     Text("Type to find an app", style = noteStyle, modifier = Modifier.padding(start = 6.dp))

@@ -257,6 +257,7 @@ class MainActivity : ComponentActivity() {
                         isDefaultHome = isHome,
                         onColumnsChange = settingsStore::setColumns,
                         onAdaptSpeedChange = settingsStore::setAdaptSpeed,
+                        onCursorStyleChange = settingsStore::setCursorStyle,
                         onClearSearchHistory = launchStats::clear,
                         iconPacks = iconPacks,
                         onIconPackChange = settingsStore::setIconPack,
@@ -407,7 +408,7 @@ class MainActivity : ComponentActivity() {
                             ),
                         ) {
                             Column {
-                                TypedLine(text = typed, status = status, noMatches = results?.isEmpty() == true)
+                                TypedLine(text = typed, status = status, noMatches = results?.isEmpty() == true, cursorStyle = settings.cursorStyle)
                                 Keyboard(
                                     listening = listening,
                                     litKeys = litKeys,

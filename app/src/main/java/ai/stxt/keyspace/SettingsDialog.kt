@@ -50,6 +50,7 @@ fun SettingsDialog(
     isDefaultHome: Boolean,
     onColumnsChange: (Int) -> Unit,
     onAdaptSpeedChange: (AdaptSpeed) -> Unit,
+    onCursorStyleChange: (CursorStyle) -> Unit,
     onClearSearchHistory: () -> Unit,
     iconPacks: List<IconPackInfo>,
     onIconPackChange: (String?) -> Unit,
@@ -102,6 +103,18 @@ fun SettingsDialog(
                                 onClick = { onAdaptSpeedChange(speed) },
                                 shape = SegmentedButtonDefaults.itemShape(index, AdaptSpeed.entries.size, KeyspaceTokens.SmallShape),
                             ) { Text(speed.name) }
+                        }
+                    }
+                }
+
+                Section("Cursor", "The cursor after the text you type") {
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        CursorStyle.entries.forEachIndexed { index, style ->
+                            SegmentedButton(
+                                selected = style == settings.cursorStyle,
+                                onClick = { onCursorStyleChange(style) },
+                                shape = SegmentedButtonDefaults.itemShape(index, CursorStyle.entries.size, KeyspaceTokens.SmallShape),
+                            ) { Text(style.name, maxLines = 1) }
                         }
                     }
                 }
