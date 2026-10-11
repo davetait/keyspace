@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -120,6 +121,7 @@ data class DrawerState(val overlay: Overlay = Overlay.None, val dragging: Boolea
 
 private val IconSize = 48.dp
 private val GridCellHeight = 96.dp
+private val GridPadding = 8.dp
 private const val DockSize = 4
 private const val ResultRows = 2
 
@@ -142,6 +144,11 @@ fun HomeScreen(
     onLaunchResult: (AppEntry) -> Unit,
     homeMenu: HomeMenuActions,
     widgets: WidgetsUi,
+    /**
+     * Set when the search line is hidden: what's typed (or a message), shown just above the results. The grid
+     * gets a row where the line was.
+     */
+    floatingLine: (@Composable () -> Unit)?,
     inputArea: @Composable () -> Unit,
 ) {
     // The placed icon being dragged, so its cell can dim; null for drawer drags or no drag.
@@ -203,6 +210,7 @@ fun HomeScreen(
                     onLaunchResult = onLaunchResult,
                     homeMenu = homeMenu,
                     widgets = widgets,
+                    floatingLine = floatingLine,
                 )
                 DrawerOverlay(apps, drawerState, repository, onDrawerStateChange)
                 PanelOverlay(visible = drawerState.overlay == Overlay.Widgets, dragging = drawerState.dragging) { modifier ->
@@ -266,6 +274,7 @@ private fun HomeGrid(
     onLaunchResult: (AppEntry) -> Unit,
     homeMenu: HomeMenuActions,
     widgets: WidgetsUi,
+    floatingLine: (@Composable () -> Unit)?,
 ) {
     // Where the home menu was requested; null when closed.
     var menuAt by remember { mutableStateOf<Offset?>(null) }
@@ -274,10 +283,14 @@ private fun HomeGrid(
             .fillMaxSize()
             // Long-press on empty space. Icons consume their own long-press (Remove), so they never reach this.
             .pointerInput(Unit) { detectTapGestures(onLongPress = { menuAt = it }) }
-            .padding(horizontal = 8.dp, vertical = 8.dp)
+            .padding(GridPadding)
     ) {
         // Fixed geometry (rows share the height evenly) so widgets can be positioned by cell.
-        val rows = (maxHeight / GridCellHeight).toInt().coerceAtLeast(1)
+        // With the search line hidden, exactly one more row than with it shown (cells shrink a little if the
+        // freed space alone isn't a full row), so the row really appears where the line was.
+        val extraRow = floatingLine != null
+        val rows = ((maxHeight - if (extraRow) SearchLineHeight else 0.dp) / GridCellHeight).toInt().coerceAtLeast(1) +
+            (if (extraRow) 1 else 0)
         val cellWidth = maxWidth / columns
         val cellHeight = maxHeight / rows
         val metrics = GridMetrics(columns, rows, cellWidth.value, cellHeight.value)
@@ -352,6 +365,17 @@ private fun HomeGrid(
                     ResultCell(match, isTop = match != null && match == results.firstOrNull(), repository, onLaunchResult, Modifier.weight(1f).fillMaxHeight())
                 }
             }
+        }
+        if (floatingLine != null && !resultsSuspended) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    // Right on top of the results (one row or two); just above the keyboard when nothing matches.
+                    .padding(bottom = cellHeight * (resultRows?.count { row -> row.any { it != null } } ?: 0))
+                    // Out to the screen edges (centered over the grid's padding), so the text lines up with the
+                    // keyboard as the search line does.
+                    .requiredWidth(maxWidth + GridPadding * 2)
+            ) { floatingLine() }
         }
     }
     HomeMenu(at = menuAt, actions = homeMenu, onDismiss = { menuAt = null })

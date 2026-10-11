@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -258,6 +259,7 @@ class MainActivity : ComponentActivity() {
                         onColumnsChange = settingsStore::setColumns,
                         onAdaptSpeedChange = settingsStore::setAdaptSpeed,
                         onCursorStyleChange = settingsStore::setCursorStyle,
+                        onShowSearchLineChange = settingsStore::setShowSearchLine,
                         onClearSearchHistory = launchStats::clear,
                         iconPacks = iconPacks,
                         onIconPackChange = settingsStore::setIconPack,
@@ -342,6 +344,17 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                // Above the keyboard, or over the grid when the search line setting is off.
+                val typedLine: @Composable () -> Unit = {
+                    TypedLine(
+                        text = typed,
+                        status = status,
+                        noMatches = results?.isEmpty() == true,
+                        cursorStyle = settings.cursorStyle,
+                        floating = !settings.showSearchLine,
+                    )
+                }
+
                 val appActions = remember(repository) { AppActions(repository, onRename = { renaming = it }) }
                 CompositionLocalProvider(
                     LocalIconStyle provides iconStyle,
@@ -368,6 +381,8 @@ class MainActivity : ComponentActivity() {
                             },
                             results = results,
                             onLaunchResult = ::launchResult,
+                            // With the search line hidden, typing (and any message) shows just above the results.
+                            floatingLine = typedLine.takeIf { !settings.showSearchLine },
                             homeMenu = HomeMenuActions(
                                 onWallpaper = { openWallpaperPicker() },
                         onKeyspaceWallpaper = ::useKeyspaceWallpaper,
@@ -408,7 +423,7 @@ class MainActivity : ComponentActivity() {
                             ),
                         ) {
                             Column {
-                                TypedLine(text = typed, status = status, noMatches = results?.isEmpty() == true, cursorStyle = settings.cursorStyle)
+                                if (settings.showSearchLine) typedLine()
                                 Keyboard(
                                     listening = listening,
                                     litKeys = litKeys,

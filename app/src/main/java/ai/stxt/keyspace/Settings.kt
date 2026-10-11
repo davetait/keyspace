@@ -26,6 +26,8 @@ data class KeyspaceSettings(
     /** Android 13+ monochrome icons, tinted to the wallpaper colors. */
     val themedIcons: Boolean = false,
     val cursorStyle: CursorStyle = CursorStyle.Invisible,
+    /** The typed-text line above the keyboard. When off, that space is another row of icons. */
+    val showSearchLine: Boolean = true,
 ) {
     companion object {
         const val DEFAULT_COLUMNS = 5
@@ -39,6 +41,7 @@ data class KeyspaceSettings(
             notificationDots: Boolean = false,
             themedIcons: Boolean = false,
             cursorStyle: String? = null,
+            showSearchLine: Boolean = true,
         ) = KeyspaceSettings(
             columns = columns?.coerceIn(COLUMN_RANGE) ?: DEFAULT_COLUMNS,
             adaptSpeed = AdaptSpeed.entries.firstOrNull { it.name == adaptSpeed } ?: AdaptSpeed.Normal,
@@ -46,6 +49,7 @@ data class KeyspaceSettings(
             notificationDots = notificationDots,
             themedIcons = themedIcons,
             cursorStyle = CursorStyle.entries.firstOrNull { it.name == cursorStyle } ?: CursorStyle.Invisible,
+            showSearchLine = showSearchLine,
         )
     }
 }
@@ -61,6 +65,7 @@ class SettingsStore(context: Context) {
             notificationDots = prefs.getBoolean(NOTIFICATION_DOTS, false),
             themedIcons = prefs.getBoolean(THEMED_ICONS, false),
             cursorStyle = prefs.getString(CURSOR_STYLE, null),
+            showSearchLine = prefs.getBoolean(SHOW_SEARCH_LINE, true),
         )
     )
     val settings: StateFlow<KeyspaceSettings> = _settings.asStateFlow()
@@ -86,6 +91,8 @@ class SettingsStore(context: Context) {
 
     fun setCursorStyle(style: CursorStyle) = update(_settings.value.copy(cursorStyle = style))
 
+    fun setShowSearchLine(on: Boolean) = update(_settings.value.copy(showSearchLine = on))
+
     private fun update(settings: KeyspaceSettings) {
         _settings.value = settings
         prefs.edit {
@@ -95,6 +102,7 @@ class SettingsStore(context: Context) {
             putBoolean(NOTIFICATION_DOTS, settings.notificationDots)
             putBoolean(THEMED_ICONS, settings.themedIcons)
             putString(CURSOR_STYLE, settings.cursorStyle.name)
+            putBoolean(SHOW_SEARCH_LINE, settings.showSearchLine)
         }
     }
 
@@ -106,5 +114,6 @@ class SettingsStore(context: Context) {
         const val NOTIFICATION_DOTS = "notification_dots"
         const val THEMED_ICONS = "themed_icons"
         const val CURSOR_STYLE = "cursor_style"
+        const val SHOW_SEARCH_LINE = "show_search_line"
     }
 }

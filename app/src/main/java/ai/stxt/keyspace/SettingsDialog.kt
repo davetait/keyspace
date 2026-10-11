@@ -51,6 +51,7 @@ fun SettingsDialog(
     onColumnsChange: (Int) -> Unit,
     onAdaptSpeedChange: (AdaptSpeed) -> Unit,
     onCursorStyleChange: (CursorStyle) -> Unit,
+    onShowSearchLineChange: (Boolean) -> Unit,
     onClearSearchHistory: () -> Unit,
     iconPacks: List<IconPackInfo>,
     onIconPackChange: (String?) -> Unit,
@@ -102,6 +103,14 @@ fun SettingsDialog(
                 Section("Cursor", "The cursor after the text you type") {
                     ChoiceRow(CursorStyle.entries, settings.cursorStyle, onCursorStyleChange)
                 }
+
+                SwitchSection(
+                    title = "Search line",
+                    description = "Show what you type above the keyboard. When off, the space holds another row of icons, " +
+                        "and your typing appears above the results.",
+                    checked = settings.showSearchLine,
+                    onCheckedChange = onShowSearchLineChange,
+                )
 
                 Section("Icon pack", "Restyle app icons with an icon pack app") {
                     Column {

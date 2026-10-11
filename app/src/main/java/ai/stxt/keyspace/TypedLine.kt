@@ -49,7 +49,13 @@ fun TypedLine(
     noMatches: Boolean,
     cursorStyle: CursorStyle,
     modifier: Modifier = Modifier,
+    /**
+     * Shown over the home grid (the search line setting is off) rather than above the keyboard: no hint, nothing
+     * at all until something is typed, and messages get a backing so they read over icons.
+     */
+    floating: Boolean = false,
 ) {
+    if (floating && text.isEmpty() && status == null) return
     // A plain on/off blink (as in text fields), not a fade: a fade redraws the whole screen every frame, forever,
     // costing battery and competing with scrolling; this redraws twice a second. Solid while typing.
     // Solid and Invisible run no timer at all, so an idle home screen doesn't redraw.
@@ -71,7 +77,8 @@ fun TypedLine(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(56.dp)
+            .then(if (floating && status != null) Modifier.background(KeyspaceColors.panel) else Modifier)
+            .height(SearchLineHeight)
             // Lines up with the keyboard's first key.
             .padding(horizontal = 12.dp)
             .semantics {
@@ -104,3 +111,6 @@ fun TypedLine(
 }
 
 private const val CURSOR_BLINK_MILLIS = 530L
+
+/** Height of the typed-text line; the grid gains a row in its place when it's hidden. */
+val SearchLineHeight = 56.dp

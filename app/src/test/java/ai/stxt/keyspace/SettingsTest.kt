@@ -35,4 +35,10 @@ class SettingsTest {
         assertEquals(CursorStyle.Blinking, KeyspaceSettings.parse(5, "Normal", cursorStyle = "Blinking").cursorStyle)
         assertEquals(CursorStyle.Invisible, KeyspaceSettings.parse(5, "Normal", cursorStyle = "Flashing").cursorStyle)
     }
+
+    @Test
+    fun `search line is shown unless turned off`() {
+        assertEquals(true, KeyspaceSettings.parse(null, null).showSearchLine)
+        assertEquals(false, KeyspaceSettings.parse(5, "Normal", showSearchLine = false).showSearchLine)
+    }
 }
