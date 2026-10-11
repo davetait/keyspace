@@ -96,27 +96,11 @@ fun SettingsDialog(
                 }
 
                 Section("Search adapt speed", settings.adaptSpeed.description) {
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                        AdaptSpeed.entries.forEachIndexed { index, speed ->
-                            SegmentedButton(
-                                selected = speed == settings.adaptSpeed,
-                                onClick = { onAdaptSpeedChange(speed) },
-                                shape = SegmentedButtonDefaults.itemShape(index, AdaptSpeed.entries.size, KeyspaceTokens.SmallShape),
-                            ) { Text(speed.name) }
-                        }
-                    }
+                    ChoiceRow(AdaptSpeed.entries, settings.adaptSpeed, onAdaptSpeedChange)
                 }
 
                 Section("Cursor", "The cursor after the text you type") {
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                        CursorStyle.entries.forEachIndexed { index, style ->
-                            SegmentedButton(
-                                selected = style == settings.cursorStyle,
-                                onClick = { onCursorStyleChange(style) },
-                                shape = SegmentedButtonDefaults.itemShape(index, CursorStyle.entries.size, KeyspaceTokens.SmallShape),
-                            ) { Text(style.name, maxLines = 1) }
-                        }
-                    }
+                    ChoiceRow(CursorStyle.entries, settings.cursorStyle, onCursorStyleChange)
                 }
 
                 Section("Icon pack", "Restyle app icons with an icon pack app") {
@@ -199,6 +183,20 @@ fun SettingsDialog(
                     TextButton(onClick = onDismiss) { Text("Done") }
                 }
             }
+        }
+    }
+}
+
+/** One segmented button per enum value, labelled with its name. */
+@Composable
+private fun <E : Enum<E>> ChoiceRow(entries: List<E>, selected: E, onSelect: (E) -> Unit) {
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        entries.forEachIndexed { index, entry ->
+            SegmentedButton(
+                selected = entry == selected,
+                onClick = { onSelect(entry) },
+                shape = SegmentedButtonDefaults.itemShape(index, entries.size, KeyspaceTokens.SmallShape),
+            ) { Text(entry.name, maxLines = 1) }
         }
     }
 }
