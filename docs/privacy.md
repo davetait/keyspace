@@ -44,4 +44,4 @@ If this policy changes, the new version will be posted here with a new date.
 
 ## Contact
 
-Questions: davetait@gmail.com
+Questions: keyspaceapps@gmail.com
