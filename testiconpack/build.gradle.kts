@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "ai.stxt.keyspace.testiconpack"
+    namespace = "com.keyspaceapps.keyspace.testiconpack"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "ai.stxt.keyspace.testiconpack"
+        applicationId = "com.keyspaceapps.keyspace.testiconpack"
         minSdk = 26
         targetSdk = 37
         versionCode = 1

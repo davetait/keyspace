@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -18,16 +20,34 @@ base {
     archivesName = "keyspace-$appVersionName"
 }
 
+// Release signing: the Google Play upload key, read from keystore.properties in the project root (never committed;
+// see .gitignore). Without that file, release builds fall back to the debug key so they still build and install
+// locally, but Google Play rejects them.
+val keystoreProps = Properties().apply {
+    rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+
 android {
-    namespace = "ai.stxt.keyspace"
+    namespace = "com.keyspaceapps.keyspace"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "ai.stxt.keyspace"
+        applicationId = "com.keyspaceapps.keyspace"
         minSdk = 26
         targetSdk = 37
         versionCode = buildNumber
         versionName = appVersionName
+    }
+
+    signingConfigs {
+        if (!keystoreProps.isEmpty) {
+            create("upload") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -35,10 +55,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signed with the debug key for now, so a release build installs over a debug one (same signature,
-            // no uninstall, settings kept). Replace with a real release key before sharing it widely or
-            // publishing to Google Play.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
         }
     }
 
