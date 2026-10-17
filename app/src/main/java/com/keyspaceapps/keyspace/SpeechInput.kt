@@ -19,13 +19,22 @@ class SpeechInput(
     private val recognizer: SpeechRecognizer? =
         if (isAvailable) SpeechRecognizer.createSpeechRecognizer(context).apply { setRecognitionListener(listener()) } else null
 
+    // Stopping an idle recognizer reports ERROR_CLIENT, e.g. when the screen locks; track sessions so that never shows.
+    private var active = false
+    private var stopping = false
+
     fun start() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        recognizer?.startListening(intent) ?: onError("Speech recognition isn't available on this device")
+        val recognizer = recognizer ?: return onError("Speech recognition isn't available on this device")
+        active = true
+        stopping = false
+        recognizer.startListening(intent)
     }
 
     fun stop() {
+        if (!active) return
+        stopping = true
         recognizer?.stopListening()
     }
 
@@ -37,11 +46,15 @@ class SpeechInput(
         override fun onReadyForSpeech(params: Bundle?) = onListeningChange(true)
         override fun onEndOfSpeech() = onListeningChange(false)
         override fun onResults(results: Bundle?) {
+            active = false
             onListeningChange(false)
             results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let(onResult)
         }
         override fun onError(error: Int) {
+            active = false
             onListeningChange(false)
+            // We asked it to stop; that's not an error worth showing.
+            if (error == SpeechRecognizer.ERROR_CLIENT && stopping) return
             onError(
                 when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Didn't catch that"
